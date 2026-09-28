@@ -22,18 +22,24 @@
     "prepare": "husky install"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.27.1",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
     "concurrently": "^8.2.2",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.1",
     "eslint-plugin-react-hooks": "^4.6.0",
-    "@typescript-eslint/eslint-plugin": "^7.13.0",
-    "@typescript-eslint/parser": "^7.13.0",
-    "typescript": "^5.4.5",
     "husky": "^9.0.11",
-    "@changesets/cli": "^2.27.1"
+    "typescript": "^5.4.5"
   },
   "engines": {
     "node": ">=20.0.0"
   },
-  "packageManager": "npm@10.8.2"
+  "packageManager": "npm@10.8.2",
+  "dependencies": {
+    "dotenv": "^18.0.4",
+    "object-inspect": "^1.13.4",
+    "qs": "^6.16.0",
+    "side-channel": "^1.1.1"
+  }
 }
