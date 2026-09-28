@@ -1,2 +1,8 @@
 node_modules/
-*.md
+.next/
+dist/
+.env
+.env.local
+storage/system/*.db
+storage/system/*.db-journal
+storage/system/*.db-wal
