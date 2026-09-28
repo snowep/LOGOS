@@ -1,0 +1,36 @@
+{
+  "name": "@logos/api",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "ws": "^8.17.1",
+    "chokidar": "^3.6.0",
+    "zod": "^3.23.8",
+    "uuid": "^9.0.1",
+    "@logos/core": "../../packages/core",
+    "@logos/contracts": "../../packages/contracts"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/ws": "^8.5.10",
+    "@types/node": "^20.14.2",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.4.5",
+    "tsx": "^4.15.7",
+    "vitest": "^1.6.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0"
+  }
+}
