@@ -3,9 +3,14 @@ import chokidar from 'chokidar';
 import fs from 'fs';
 import { SafeFilesystemAdapter } from '@logos/core/src/filesystem';
 import { Stats } from 'fs';
+import { initializeSchema, close as closeDb } from './db';
+import { writeEpisodic, searchAllMemory } from './memory';
 
 const port = parseInt(process.env.PORT || '3001', 10);
 const vaultPath = process.env.VAULT_PATH || '../../storage/workspace/vault';
+
+// Initialize database
+initializeSchema();
 
 // Ensure vault directory exists
 if (!fs.existsSync(vaultPath)) {
@@ -128,6 +133,15 @@ watcher.on('all', async (event, path) => {
       content = await fs.promises.readFile(fullPath, 'utf8');
       stats = fileStats;
       contentHash = computeContentHash(content);
+      
+      // Also store in episodic memory
+      await writeEpisodic({
+        type: 'file-' + event,
+        content: `File ${event}: ${relativePath}\n\n${content}`,
+        metadata: { path: relativePath, event },
+        timestamp: Date.now(),
+        source: 'vault-watcher'
+      });
     } catch (err: any) {
       // File might have been deleted already
       console.log(`Could not read file ${path}:`, err.message);
@@ -150,7 +164,51 @@ watcher.on('all', async (event, path) => {
   });
 });
 
-const server = http.createServer((req, res) => {
+// Simple router for REST endpoints
+async function handleRestRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const url = req.url || '';
+  const method = req.method || 'GET';
+  
+  // Parse path and query
+  const [pathname, queryString] = url.split('?');
+  const query: Record<string, string> = {};
+  if (queryString) {
+    for (const pair of queryString.split('&')) {
+      const [k, v] = pair.split('=');
+      query[decodeURIComponent(k)] = decodeURIComponent(v || '');
+    }
+  }
+
+  // Memory API routes
+  if (pathname.startsWith('/api/memory')) {
+    const subPath = pathname.replace('/api/memory', '') || '/';
+    
+    // Search all memory
+    if (subPath === '/search' && method === 'GET') {
+      const q = query.q;
+      const limit = parseInt(query.limit || '10');
+      if (!q) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'q parameter required' }));
+        return true;
+      }
+      try {
+        const results = await searchAllMemory(q, limit);
+        const total = results.episodic.length + results.semantic.length + results.procedural.length;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ...results, total }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+const server = http.createServer(async (req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
@@ -164,24 +222,24 @@ const server = http.createServer((req, res) => {
 
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      service: 'logos-api',
-      version: '0.1.0'
-    }));
-    return;
-  }
+      res.end(JSON.stringify({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        service: 'logos-api',
+        version: '0.2.0'
+      }));
+      return;
+    }
 
-  if (req.url === '/api/version') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      version: '0.1.0',
-      name: 'logos',
-      activePhase: 'P0.4'
-    }));
-    return;
-  }
+    if (req.url === '/api/version') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        version: '0.2.0',
+        name: 'logos',
+        activePhase: 'P0.2'
+      }));
+      return;
+    }
 
   // Manual sync trigger endpoint
   if (req.url === '/api/vault/sync' && req.method === 'POST') {
@@ -214,6 +272,19 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('Shutting down...');
+  closeDb();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('Shutting down...');
+  closeDb();
+  process.exit(0);
 });
 
 server.listen(port, '127.0.0.1', () => {
