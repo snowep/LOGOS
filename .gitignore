@@ -6,3 +6,5 @@ dist/
 storage/system/*.db
 storage/system/*.db-journal
 storage/system/*.db-wal
+*.tsbuildinfo
+next-env.d.ts
