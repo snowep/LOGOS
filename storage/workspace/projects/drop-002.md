@@ -3,8 +3,8 @@ id: proj_001
 type: project
 slug: drop-002
 status: active
-created: 2026-09-28T15:16:26.493Z
-updated: 2026-09-28T15:16:26.495Z
+created: 2026-09-28T21:35:58.594Z
+updated: 2026-09-28T21:35:58.595Z
 ---
 
 # DROP 002 Logistics & Planning
