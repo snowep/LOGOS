@@ -1,3 +1,3 @@
-export * from './filesystem.js';
-export * from './markdown.js';
-export * from './db.js';
+export * from './filesystem';
+export * from './markdown';
+export * from './db';

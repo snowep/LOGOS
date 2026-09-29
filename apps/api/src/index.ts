@@ -1,6 +1,154 @@
 import http from 'http';
+import chokidar from 'chokidar';
+import fs from 'fs';
+import { SafeFilesystemAdapter } from '@logos/core/src/filesystem';
+import { Stats } from 'fs';
 
-const port = process.env.PORT || 3001;
+const port = parseInt(process.env.PORT || '3001', 10);
+const vaultPath = process.env.VAULT_PATH || '../../storage/workspace/vault';
+
+// Ensure vault directory exists
+if (!fs.existsSync(vaultPath)) {
+  fs.mkdirSync(vaultPath, { recursive: true });
+}
+
+// Set up file watcher for the vault
+const watcher = chokidar.watch(vaultPath, {
+  ignored: /(^|[\\/\\\\])\\../, // ignore dotfiles
+  persistent: true
+});
+
+const sseClients = new Set<{id: string; res: http.ServerResponse}>();
+
+// SSE handler function
+function sseHandler(req: http.IncomingMessage, res: http.ServerResponse) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Send a comment to prevent proxies from buffering
+  res.write(': welcome\n\n');
+  
+  const clientId = Date.now() + '-' + Math.random();
+  sseClients.add({ id: clientId, res } as { id: string; res: http.ServerResponse });
+  
+  // Send heartbeat every 30 seconds
+  const heartbeat = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 30000);
+  
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete({ id: clientId, res });
+    res.end();
+  });
+}
+
+// Track file states for conflict detection
+const fileStates = new Map(); // path -> { mtime, size, contentHash, lastEventTime }
+
+// Function to compute content hash for conflict detection
+function computeContentHash(content: string): number {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & 0xFFFFFFFF;
+  }
+  return (hash >>> 0);
+}
+
+// Function to detect conflicts
+function detectConflict(relativePath: string, eventType: string, stats: Stats | null, contentHash: number): boolean {
+  const existingState = fileStates.get(relativePath);
+  if (!existingState) return false;
+
+  const now = Date.now();
+  const timeSinceLastEvent = now - existingState.lastEventTime;
+
+  // If file was modified very recently (within 1 second) and size/hash differs
+  if (timeSinceLastEvent < 1000) {
+    if (eventType === 'change' && stats && contentHash !== existingState.contentHash) {
+      return true; // Concurrent modification detected
+    }
+  }
+  return false;
+}
+
+// Function to broadcast an event to all SSE clients
+function broadcastEvent(eventType: string, data: any) {
+  const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+  sseClients.forEach((client: { id: string; res: http.ServerResponse }) => {
+    try {
+      client.res.write(payload);
+    } catch (err: any) {
+      // Client likely disconnected
+      sseClients.delete(client);
+    }
+  });
+}
+
+// Function to update file state tracking
+function updateFileState(relativePath: string, eventType: string, stats: Stats | null, contentHash: number) {
+  const now = Date.now();
+  
+  if (eventType === 'unlink' || eventType === 'unlinkDir') {
+    fileStates.delete(relativePath);
+    return;
+  }
+
+  if (stats) {
+    fileStates.set(relativePath, {
+      mtime: stats.mtimeMs,
+      size: stats.size,
+      contentHash: contentHash,
+      lastEventTime: now
+    });
+  }
+}
+
+// Watch for changes in the vault
+watcher.on('all', async (event, path) => {
+  console.log(`Vault file ${event}: ${path}`);
+  // Get relative path from vault root
+  const relativePath = path.replace(vaultPath + '/', '').replace(/\\/g, '/');
+
+  let stats = null;
+  let content = null;
+  let contentHash = 0;
+
+  // For change events, read the file content for conflict detection and broadcasting
+  if (event === 'change' || event === 'add') {
+    try {
+      const fullPath = path;
+      const fileStats = await fs.promises.stat(fullPath);
+      content = await fs.promises.readFile(fullPath, 'utf8');
+      stats = fileStats;
+      contentHash = computeContentHash(content);
+    } catch (err: any) {
+      // File might have been deleted already
+      console.log(`Could not read file ${path}:`, err.message);
+    }
+  }
+
+  // Check for conflicts
+  const conflict = detectConflict(relativePath, event, stats, contentHash);
+
+  // Update file state
+  updateFileState(relativePath, event, stats, contentHash);
+
+  // Broadcast file change event
+  broadcastEvent('file-change', {
+    event,
+    path: relativePath,
+    timestamp: new Date().toISOString(),
+    conflict,
+    ...(content !== null ? { content } : {})
+  });
+});
 
 const server = http.createServer((req, res) => {
   // Enable CORS
@@ -30,8 +178,37 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       version: '0.1.0',
       name: 'logos',
-      activePhase: 'P0.2'
+      activePhase: 'P0.4'
     }));
+    return;
+  }
+
+  // Manual sync trigger endpoint
+  if (req.url === '/api/vault/sync' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      let syncPath = vaultPath;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed.path) syncPath = parsed.path;
+      } catch (e) { /* use default */ }
+
+      // Broadcast a sync-triggered event to all SSE clients
+      broadcastEvent('sync-trigger', {
+        path: syncPath,
+        timestamp: new Date().toISOString(),
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'synced', path: syncPath, timestamp: new Date().toISOString() }));
+    });
+    return;
+  }
+
+  // SSE endpoint for vault sync events
+  if (req.url === '/events/vault' && req.method === 'GET') {
+    sseHandler(req, res);
     return;
   }
 
@@ -39,8 +216,10 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-server.listen(port, () => {
+server.listen(port, '127.0.0.1', () => {
   console.log(`LOGOS API server running on http://localhost:${port}`);
+  console.log(`Vault SSE endpoint: http://localhost:${port}/events/vault`);
+  console.log(`Watching vault directory: ${vaultPath}`);
 });
 
 export default server;
