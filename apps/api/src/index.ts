@@ -22,12 +22,51 @@ import {
   writeWorking, getWorking, getAllWorking, updateWorking, deleteWorking, clearExpiredWorking, clearSessionWorking,
   searchAllMemory
 } from './memory';
+import { config } from './config';
 
+import { execSync } from 'child_process';
 const port = parseInt(process.env.PORT || '3001', 10);
 const vaultPath = process.env.VAULT_PATH || path.resolve(__dirname, '../../../storage/workspace/vault');
 
 // Initialize database
 initializeSchema();
+// Simple in-memory log buffer for system logs
+const logBuffer: Array<{ timestamp: number; level: string; args: string[] }> = [];
+const MAX_LOG_ENTRIES = 1000;
+
+// Override console.log to capture logs
+const originalLog = console.log;
+console.log = function (...args) {
+  const entry = { timestamp: Date.now(), level: 'log', args: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)) };
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) logBuffer.shift();
+  originalLog.apply(console, args);
+};
+// Override console.error
+const originalError = console.error;
+console.error = function (...args) {
+  const entry = { timestamp: Date.now(), level: 'error', args: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)) };
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) logBuffer.shift();
+  originalError.apply(console, args);
+};
+// Override console.warn
+const originalWarn = console.warn;
+console.warn = function (...args) {
+  const entry = { timestamp: Date.now(), level: 'warn', args: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)) };
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) logBuffer.shift();
+  originalWarn.apply(console, args);
+};
+// Override console.info
+const originalInfo = console.info;
+console.info = function (...args) {
+  const entry = { timestamp: Date.now(), level: 'info', args: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)) };
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) logBuffer.shift();
+  originalInfo.apply(console, args);
+};
+
 
 // Ensure vault directory exists
 if (!fs.existsSync(vaultPath)) {
@@ -951,6 +990,98 @@ async function handleRestRequest(req: http.IncomingMessage, res: http.ServerResp
               }
             }
           }
+
+  // System metrics endpoint
+  if (pathname === '/api/system' && method === 'GET') {
+    try {
+      const health = { status: 'ok', timestamp: new Date().toISOString(), service: config.name, version: config.version };
+      
+      // Storage stats
+      const dbPath = config.dbPath;
+      const dbStat = fs.statSync(dbPath);
+      const pageCountRow = db.prepare('PRAGMA page_count').get();
+      const cacheSizeRow = db.prepare('PRAGMA cache_size').get();
+      const docCountRow = db.prepare('SELECT COUNT(*) as count FROM documents').get();
+      const storage = {
+        databaseSize: dbStat.size,
+        pageCount: pageCountRow.page_count,
+        cacheSize: cacheSizeRow.cache_size,
+        documentCount: docCountRow.count
+      };
+      
+      // Retrieval stats
+      const retrieval = {
+        vecAvailable: false, // sqlite-vec not available on Windows via npm
+        embeddingModel: null // not configured
+      };
+      
+      // Events stats
+      const sseClientsCount = sseClients.size;
+      const eventCountRow = db.prepare('SELECT COUNT(*) as count FROM document_events').get();
+      const events = {
+        sseClients: sseClientsCount,
+        recentEventsCount: eventCountRow.count
+      };
+      
+      // Runtime stats
+      const runtime = {
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage()
+      };
+      
+      // Logs
+      const recentLogs = logBuffer.slice(-50).map(entry => ({
+        timestamp: entry.timestamp,
+        level: entry.level,
+        message: entry.args.join(' ')
+      }));
+      const logs = { recent: recentLogs };
+      
+      // Configuration
+      const configuration = {
+        port: config.port,
+        vaultPath: config.vaultPath,
+        dbPath: config.dbPath,
+        cors: config.cors,
+        rateLimit: config.rateLimit,
+        sse: config.sse,
+        logosWriteCleanup: config.logosWriteCleanup,
+        maxFileSize: config.maxFileSize,
+        version: config.version,
+        name: config.name,
+        activePhase: config.activePhase
+      };
+      
+      // Developer info
+      let gitBranch = null;
+      try {
+        gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', cwd: path.resolve(__dirname, '../../../..') }).trim();
+      } catch (e) {
+        gitBranch = null;
+      }
+      const developer = {
+        activePhase: config.activePhase,
+        gitBranch: gitBranch
+      };
+      
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        health,
+        storage,
+        retrieval,
+        events,
+        runtime,
+        logs,
+        configuration,
+        developer
+      }));
+} catch (err: any) {
+      console.error('Error fetching system metrics:', err);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return true;
+  }
 
           return false;
 }
