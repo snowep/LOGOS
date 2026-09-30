@@ -17,12 +17,9 @@ dbInstance.pragma('foreign_keys = ON');
 export const db = dbInstance as any;
 
 export function initializeSchema() {
-  // Enable sqlite-vec extension
-  try {
-    db.loadExtension(path.join(__dirname, 'node_modules/sqlite-vec/dist/vec0'));
-  } catch (e) {
-    console.warn('sqlite-vec extension not available, vector search disabled');
-  }
+  // Note: sqlite-vec native extension not available on Windows via npm
+  // Vector search will be done in JavaScript using cosine similarity
+  console.warn('sqlite-vec native extension not available, using JS-based vector search');
 
   // Episodic Memory (events, interactions)
   db.exec(`
@@ -112,25 +109,6 @@ export function initializeSchema() {
     );
   `);
 
-  // Vector search virtual tables using sqlite-vec
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS vec_episodic USING vec0(
-      embedding FLOAT[384]
-    );
-  `);
-
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS vec_semantic USING vec0(
-      embedding FLOAT[384]
-    );
-  `);
-
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS vec_procedural USING vec0(
-      embedding FLOAT[384]
-    );
-  `);
-
   // Indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_episodic_timestamp ON episodic_memory(timestamp DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_semantic_category ON semantic_memory(category);`);
@@ -138,7 +116,7 @@ export function initializeSchema() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_context_memory ON context_index(memory_type, memory_id);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);`);
 
-  console.log('Database schema initialized with sqlite-vec');
+  console.log('Database schema initialized (JS-based vector search)');
 }
 
 export function close() {

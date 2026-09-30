@@ -1,5 +1,5 @@
 import { db, EpisodicMemory, SemanticMemory, ProceduralMemory, WorkingMemory } from '../db';
-import { generateEmbedding, embeddingToBuffer, bufferToEmbedding, EMBEDDING_CONFIG } from '../embeddings';
+import { generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity, EMBEDDING_CONFIG } from '../embeddings';
 import { v4 as uuidv4 } from 'uuid';
 
 function now() { return Date.now(); }
@@ -14,7 +14,6 @@ interface EpisodicRow {
   timestamp: number;
   session_id: string | null;
   source: string | null;
-  distance?: number;
 }
 
 interface SemanticRow {
@@ -28,7 +27,6 @@ interface SemanticRow {
   updated_at: number;
   access_count: number;
   last_accessed: number | null;
-  distance?: number;
 }
 
 interface ProceduralRow {
@@ -42,7 +40,6 @@ interface ProceduralRow {
   use_count: number;
   created_at: number;
   updated_at: number;
-  distance?: number;
 }
 
 interface WorkingRow {
@@ -56,48 +53,65 @@ interface WorkingRow {
   updated_at: number;
 }
 
+// JS-based vector search helper
+async function vectorSearch<T extends { embedding: Buffer | null }>(
+  table: string,
+  queryEmbedding: Float32Array,
+  limit: number,
+  threshold: number,
+  rowMapper: (row: T, similarity: number) => any
+): Promise<any[]> {
+  const rows = db.prepare(`SELECT * FROM ${table}`).all() as T[];
+  
+  const results: { item: any; similarity: number }[] = [];
+  
+  for (const row of rows) {
+    if (!row.embedding) continue;
+    const storedEmbedding = bufferToEmbedding(row.embedding);
+    const similarity = cosineSimilarity(queryEmbedding, storedEmbedding);
+    if (similarity >= threshold) {
+      results.push({ item: rowMapper(row, similarity), similarity });
+    }
+  }
+  
+  results.sort((a, b) => b.similarity - a.similarity);
+  return results.slice(0, limit).map(r => r.item);
+}
+
 // ===== EPISODIC MEMORY =====
 export async function writeEpisodic(memory: Omit<EpisodicMemory, 'id' | 'embedding'>): Promise<string> {
   const id = uuidv4();
   const embedding = await generateEmbedding(memory.content);
   
   const stmt = db.prepare(`
-      INSERT INTO episodic_memory (id, type, content, metadata, embedding, timestamp, session_id, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    INSERT INTO episodic_memory (id, type, content, metadata, embedding, timestamp, session_id, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
   stmt.run(id, memory.type, memory.content, JSON.stringify(memory.metadata || {}), embeddingToBuffer(embedding), memory.timestamp, memory.session_id || null, memory.source || null);
-
-  // Also insert into vec table
-  const vecStmt = db.prepare('INSERT INTO vec_episodic (rowid, embedding) VALUES (?, ?)');
-  vecStmt.run(id, embeddingToBuffer(embedding));
 
   return id;
 }
 
 export async function searchEpisodic(query: string, limit = 10, threshold = EMBEDDING_CONFIG.similarityThreshold): Promise<(EpisodicMemory & { similarity: number })[]> {
   const queryEmbedding = await generateEmbedding(query);
-  const queryBuffer = embeddingToBuffer(queryEmbedding);
-
-  const rows = db.prepare(`
-    SELECT e.*, vec_distance_cosine(embedding, ?) as distance
-    FROM episodic_memory e
-    JOIN vec_episodic v ON e.id = v.rowid
-    WHERE vec_distance_cosine(embedding, ?) < ?
-    ORDER BY distance ASC
-    LIMIT ?
-  `).all(queryBuffer, queryBuffer, 1 - threshold, limit) as EpisodicRow[];
-
-  return rows.map(row => ({
-    id: row.id,
-    type: row.type,
-    content: row.content,
-    metadata: row.metadata ? JSON.parse(row.metadata) : {},
-    embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
-    timestamp: row.timestamp,
-    session_id: row.session_id || undefined,
-    source: row.source || undefined,
-    similarity: row.distance !== undefined ? 1 - row.distance : 1,
-  }));
+  
+  return vectorSearch<EpisodicRow>(
+    'episodic_memory',
+    queryEmbedding,
+    limit,
+    threshold,
+    (row, similarity) => ({
+      id: row.id,
+      type: row.type,
+      content: row.content,
+      metadata: row.metadata ? JSON.parse(row.metadata) : {},
+      embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
+      timestamp: row.timestamp,
+      session_id: row.session_id || undefined,
+      source: row.source || undefined,
+      similarity,
+    })
+  );
 }
 
 export function getEpisodicById(id: string): EpisodicMemory | null {
@@ -141,38 +155,31 @@ export async function writeSemantic(memory: Omit<SemanticMemory, 'id' | 'embeddi
   `);
   stmt.run(id, memory.fact, memory.category || null, memory.confidence ?? 1.0, embeddingToBuffer(embedding), memory.source || null, timestamp, timestamp);
 
-  const vecStmt = db.prepare('INSERT INTO vec_semantic (rowid, embedding) VALUES (?, ?)');
-  vecStmt.run(id, embeddingToBuffer(embedding));
-
   return id;
 }
 
 export async function searchSemantic(query: string, limit = 10, threshold = EMBEDDING_CONFIG.similarityThreshold): Promise<(SemanticMemory & { similarity: number })[]> {
   const queryEmbedding = await generateEmbedding(query);
-  const queryBuffer = embeddingToBuffer(queryEmbedding);
-
-  const rows = db.prepare(`
-    SELECT s.*, vec_distance_cosine(embedding, ?) as distance
-    FROM semantic_memory s
-    JOIN vec_semantic v ON s.id = v.rowid
-    WHERE vec_distance_cosine(embedding, ?) < ?
-    ORDER BY distance ASC, s.confidence DESC
-    LIMIT ?
-  `).all(queryBuffer, queryBuffer, 1 - threshold, limit) as SemanticRow[];
-
-  return rows.map(row => ({
-    id: row.id,
-    fact: row.fact,
-    category: row.category || undefined,
-    confidence: row.confidence,
-    embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
-    source: row.source || undefined,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    access_count: row.access_count,
-    last_accessed: row.last_accessed || undefined,
-    similarity: row.distance !== undefined ? 1 - row.distance : 1,
-  }));
+  
+  return vectorSearch<SemanticRow>(
+    'semantic_memory',
+    queryEmbedding,
+    limit,
+    threshold,
+    (row, similarity) => ({
+      id: row.id,
+      fact: row.fact,
+      category: row.category || undefined,
+      confidence: row.confidence,
+      embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
+      source: row.source || undefined,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      access_count: row.access_count,
+      last_accessed: row.last_accessed || undefined,
+      similarity,
+    })
+  );
 }
 
 export function getSemanticById(id: string): SemanticMemory | null {
@@ -199,7 +206,7 @@ export function updateSemanticAccess(id: string): void {
 // ===== PROCEDURAL MEMORY =====
 export async function writeProcedural(memory: Omit<ProceduralMemory, 'id' | 'embedding' | 'success_rate' | 'use_count' | 'created_at' | 'updated_at'>): Promise<string> {
   const id = uuidv4();
-  const searchText = `\${memory.name} \${memory.description || ''} \${memory.steps} \${memory.triggers || ''}`;
+  const searchText = `${memory.name} ${memory.description || ''} ${memory.steps} ${memory.triggers || ''}`;
   const embedding = await generateEmbedding(searchText);
   const timestamp = now();
 
@@ -209,38 +216,31 @@ export async function writeProcedural(memory: Omit<ProceduralMemory, 'id' | 'emb
   `);
   stmt.run(id, memory.name, memory.description || null, memory.steps, memory.triggers || null, embeddingToBuffer(embedding), timestamp, timestamp);
 
-  const vecStmt = db.prepare('INSERT INTO vec_procedural (rowid, embedding) VALUES (?, ?)');
-  vecStmt.run(id, embeddingToBuffer(embedding));
-
   return id;
 }
 
 export async function searchProcedural(query: string, limit = 5, threshold = EMBEDDING_CONFIG.similarityThreshold): Promise<(ProceduralMemory & { similarity: number })[]> {
   const queryEmbedding = await generateEmbedding(query);
-  const queryBuffer = embeddingToBuffer(queryEmbedding);
-
-  const rows = db.prepare(`
-    SELECT p.*, vec_distance_cosine(embedding, ?) as distance
-    FROM procedural_memory p
-    JOIN vec_procedural v ON p.id = v.rowid
-    WHERE vec_distance_cosine(embedding, ?) < ?
-    ORDER BY distance ASC, p.success_rate DESC
-    LIMIT ?
-  `).all(queryBuffer, queryBuffer, 1 - threshold, limit) as ProceduralRow[];
-
-  return rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    description: row.description || undefined,
-    steps: row.steps,
-    triggers: row.triggers || undefined,
-    embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
-    success_rate: row.success_rate,
-    use_count: row.use_count,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    similarity: row.distance !== undefined ? 1 - row.distance : 1,
-  }));
+  
+  return vectorSearch<ProceduralRow>(
+    'procedural_memory',
+    queryEmbedding,
+    limit,
+    threshold,
+    (row, similarity) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description || undefined,
+      steps: row.steps,
+      triggers: row.triggers || undefined,
+      embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
+      success_rate: row.success_rate,
+      use_count: row.use_count,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      similarity,
+    })
+  );
 }
 
 export function recordProceduralUse(id: string, success: boolean): void {
@@ -292,7 +292,7 @@ export function getAllWorking(sessionId: string): WorkingMemory[] {
     key: row.key,
     value: row.value,
     priority: row.priority,
-    expires_at: row.expires_at || undefined,
+    expires_at: row.expires_at ?? undefined,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }));

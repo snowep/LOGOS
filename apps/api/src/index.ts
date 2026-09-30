@@ -4,7 +4,13 @@ import fs from 'fs';
 import { SafeFilesystemAdapter } from '@logos/core/src/filesystem';
 import { Stats } from 'fs';
 import { initializeSchema, close as closeDb } from './db';
-import { writeEpisodic, searchAllMemory } from './memory';
+import { 
+  writeEpisodic, searchEpisodic, getEpisodicById, getRecentEpisodic,
+  writeSemantic, searchSemantic, getSemanticById, updateSemanticAccess,
+  writeProcedural, searchProcedural, recordProceduralUse,
+  writeWorking, getWorking, getAllWorking, updateWorking, deleteWorking, clearExpiredWorking, clearSessionWorking,
+  searchAllMemory
+} from './memory';
 
 const port = parseInt(process.env.PORT || '3001', 10);
 const vaultPath = process.env.VAULT_PATH || '../../storage/workspace/vault';
@@ -168,9 +174,12 @@ watcher.on('all', async (event, path) => {
 async function handleRestRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
   const url = req.url || '';
   const method = req.method || 'GET';
+  console.log(`[handleRestRequest] ${method} ${url}`);
   
   // Parse path and query
   const [pathname, queryString] = url.split('?');
+  console.log(`[handleRestRequest] pathname: "${pathname}"`);
+  
   const query: Record<string, string> = {};
   if (queryString) {
     for (const pair of queryString.split('&')) {
@@ -179,9 +188,21 @@ async function handleRestRequest(req: http.IncomingMessage, res: http.ServerResp
     }
   }
 
+  // Helper to parse JSON body
+  async function parseBody(): Promise<any> {
+    return new Promise((resolve) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); }
+      });
+    });
+  }
+
   // Memory API routes
   if (pathname.startsWith('/api/memory')) {
     const subPath = pathname.replace('/api/memory', '') || '/';
+    console.log(`[API] ${method} ${pathname} -> subPath: "${subPath}"`);
     
     // Search all memory
     if (subPath === '/search' && method === 'GET') {
@@ -203,12 +224,300 @@ async function handleRestRequest(req: http.IncomingMessage, res: http.ServerResp
       }
       return true;
     }
+
+    // Episodic memory
+    if (subPath === '/episodic' && method === 'POST') {
+      try {
+        const body = await parseBody();
+        const { type, content, metadata, timestamp, session_id, source } = body;
+        if (!type || !content) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'type and content are required' }));
+          return true;
+        }
+        const id = await writeEpisodic({ type, content, metadata, timestamp: timestamp || Date.now(), session_id, source });
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, status: 'created' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath === '/episodic/search' && method === 'GET') {
+      const q = query.q;
+      const limit = parseInt(query.limit || '10');
+      const threshold = parseFloat(query.threshold || '0.75');
+      console.log(`[API] Episodic search: q=${q}, limit=${limit}, threshold=${threshold}`);
+      if (!q) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'q parameter required' }));
+        return true;
+      }
+      try {
+        const results = await searchEpisodic(q, limit, threshold);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ results, count: results.length }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath === '/episodic/recent' && method === 'GET') {
+      const limit = parseInt(query.limit || '50');
+      try {
+        const results = getRecentEpisodic(limit);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ results, count: results.length }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/episodic/') && method === 'GET') {
+      const id = subPath.replace('/episodic/', '');
+      console.log(`[API] Episodic GET: id=${id}, subPath=${subPath}`);
+      try {
+        const result = getEpisodicById(id);
+        if (!result) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return true;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    // Semantic memory
+    if (subPath === '/semantic' && method === 'POST') {
+      try {
+        const body = await parseBody();
+        const { fact, category, confidence, source } = body;
+        if (!fact) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'fact is required' }));
+          return true;
+        }
+        const id = await writeSemantic({ fact, category, confidence, source });
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, status: 'created' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath === '/semantic/search' && method === 'GET') {
+      const q = query.q;
+      const limit = parseInt(query.limit || '10');
+      const threshold = parseFloat(query.threshold || '0.75');
+      if (!q) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'q parameter required' }));
+        return true;
+      }
+      try {
+        const results = await searchSemantic(q, limit, threshold);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ results, count: results.length }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/semantic/') && method === 'GET') {
+      const id = subPath.replace('/semantic/', '');
+      try {
+        const result = getSemanticById(id);
+        if (!result) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return true;
+        }
+        updateSemanticAccess(id);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    // Procedural memory
+    if (subPath === '/procedural' && method === 'POST') {
+      try {
+        const body = await parseBody();
+        const { name, description, steps, triggers } = body;
+        if (!name || !steps) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'name and steps are required' }));
+          return true;
+        }
+        const id = await writeProcedural({ name, description, steps, triggers });
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, status: 'created' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath === '/procedural/search' && method === 'GET') {
+      const q = query.q;
+      const limit = parseInt(query.limit || '5');
+      const threshold = parseFloat(query.threshold || '0.75');
+      if (!q) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'q parameter required' }));
+        return true;
+      }
+      try {
+        const results = await searchProcedural(q, limit, threshold);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ results, count: results.length }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/procedural/') && subPath.endsWith('/use') && method === 'POST') {
+      const id = subPath.replace('/procedural/', '').replace('/use', '');
+      try {
+        const body = await parseBody();
+        recordProceduralUse(id, body.success ?? true);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'recorded' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    // Working memory
+    if (subPath === '/working' && method === 'POST') {
+      try {
+        const body = await parseBody();
+        const { session_id, key, value, priority, expires_at } = body;
+        if (!session_id || !key || value === undefined) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'session_id, key, and value are required' }));
+          return true;
+        }
+        const id = writeWorking({ session_id, key, value, priority, expires_at });
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, status: 'created' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/working/') && method === 'GET') {
+      const parts = subPath.replace('/working/', '').split('/');
+      const sessionId = parts[0];
+      const key = parts[1];
+      console.log(`[API] Working GET: sessionId=${sessionId}, key=${key}, subPath=${subPath}`);
+      try {
+        if (key) {
+          const result = getWorking(sessionId, key);
+          if (!result) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Not found' }));
+            return true;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } else {
+          const results = getAllWorking(sessionId);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ results, count: results.length }));
+        }
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/working/') && method === 'PUT') {
+      const parts = subPath.replace('/working/', '').split('/');
+      const sessionId = parts[0];
+      const key = parts[1];
+      try {
+        const body = await parseBody();
+        if (body.value === undefined) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'value required' }));
+          return true;
+        }
+        updateWorking(sessionId, key, body.value);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'updated' }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath.startsWith('/working/') && method === 'DELETE') {
+      const parts = subPath.replace('/working/', '').split('/');
+      const sessionId = parts[0];
+      const key = parts[1];
+      try {
+        if (key) {
+          deleteWorking(sessionId, key);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'deleted' }));
+        } else {
+          const count = clearSessionWorking(sessionId);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'cleared', count }));
+        }
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
+
+    if (subPath === '/working/cleanup' && method === 'POST') {
+      try {
+        const count = clearExpiredWorking();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'cleaned', count }));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return true;
+    }
   }
 
   return false;
 }
 
 const server = http.createServer(async (req, res) => {
+  console.log(`[Server] ${req.method} ${req.url}`);
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
@@ -219,6 +528,10 @@ const server = http.createServer(async (req, res) => {
     res.end();
     return;
   }
+
+  // Try REST API first
+  const handled = await handleRestRequest(req, res);
+  if (handled) return;
 
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

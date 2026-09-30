@@ -16,7 +16,8 @@
     "@logos/core": "../../packages/core",
     "@mui/icons-material": "^9.4.0",
     "@mui/material": "^9.4.0",
-    
+    "framer-motion": "^13.4.6",
+    "motion": "^13.4.6",
     "next": "^16.3.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
