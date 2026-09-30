@@ -3,15 +3,16 @@ node_modules/
 dist/
 .env
 .env.local
-storage/system/*.db
-storage/system/*.db-journal
-storage/system/*.db-wal
 *.tsbuildinfo
 next-env.d.ts
 
-# Ignore logs and database files
-apps/api/server.log
-apps/api/storage/system/logos.db
-apps/api/storage/system/logos.db-shm
-apps/api/storage/system/logos.db-wal
+# Runtime artifacts (never commit)
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.log
+*.bak
+storage/workspace/vault/
 apps/api/storage/
+apps/storage/
