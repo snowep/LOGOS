@@ -14,6 +14,7 @@ interface EpisodicRow {
   timestamp: number;
   session_id: string | null;
   source: string | null;
+  writer_identity: string | null;
 }
 
 interface SemanticRow {
@@ -27,6 +28,7 @@ interface SemanticRow {
   updated_at: number;
   access_count: number;
   last_accessed: number | null;
+  writer_identity: string | null;
 }
 
 interface ProceduralRow {
@@ -40,6 +42,7 @@ interface ProceduralRow {
   use_count: number;
   created_at: number;
   updated_at: number;
+  writer_identity: string | null;
 }
 
 interface WorkingRow {
@@ -84,10 +87,10 @@ export async function writeEpisodic(memory: Omit<EpisodicMemory, 'id' | 'embeddi
   const embedding = await generateEmbedding(memory.content);
   
   const stmt = db.prepare(`
-    INSERT INTO episodic_memory (id, type, content, metadata, embedding, timestamp, session_id, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO episodic_memory (id, type, content, metadata, embedding, timestamp, session_id, source, writer_identity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(id, memory.type, memory.content, JSON.stringify(memory.metadata || {}), embeddingToBuffer(embedding), memory.timestamp, memory.session_id || null, memory.source || null);
+  stmt.run(id, memory.type, memory.content, JSON.stringify(memory.metadata || {}), embeddingToBuffer(embedding), memory.timestamp, memory.session_id || null, memory.source || null, memory.writer_identity || null);
 
   return id;
 }
@@ -109,6 +112,7 @@ export async function searchEpisodic(query: string, limit = 10, threshold = EMBE
       timestamp: row.timestamp,
       session_id: row.session_id || undefined,
       source: row.source || undefined,
+      writer_identity: row.writer_identity as any,
       similarity,
     })
   );
@@ -126,6 +130,7 @@ export function getEpisodicById(id: string): EpisodicMemory | null {
     timestamp: row.timestamp,
     session_id: row.session_id || undefined,
     source: row.source || undefined,
+    writer_identity: row.writer_identity as any,
   };
 }
 
@@ -140,6 +145,7 @@ export function getRecentEpisodic(limit = 50): EpisodicMemory[] {
     timestamp: row.timestamp,
     session_id: row.session_id || undefined,
     source: row.source || undefined,
+    writer_identity: row.writer_identity as any,
   }));
 }
 
@@ -150,10 +156,10 @@ export async function writeSemantic(memory: Omit<SemanticMemory, 'id' | 'embeddi
   const timestamp = now();
 
   const stmt = db.prepare(`
-    INSERT INTO semantic_memory (id, fact, category, confidence, embedding, source, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO semantic_memory (id, fact, category, confidence, embedding, source, created_at, updated_at, writer_identity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(id, memory.fact, memory.category || null, memory.confidence ?? 1.0, embeddingToBuffer(embedding), memory.source || null, timestamp, timestamp);
+  stmt.run(id, memory.fact, memory.category || null, memory.confidence ?? 1.0, embeddingToBuffer(embedding), memory.source || null, timestamp, timestamp, memory.writer_identity || null);
 
   return id;
 }
@@ -177,6 +183,7 @@ export async function searchSemantic(query: string, limit = 10, threshold = EMBE
       updated_at: row.updated_at,
       access_count: row.access_count,
       last_accessed: row.last_accessed || undefined,
+      writer_identity: row.writer_identity as any,
       similarity,
     })
   );
@@ -196,6 +203,7 @@ export function getSemanticById(id: string): SemanticMemory | null {
     updated_at: row.updated_at,
     access_count: row.access_count,
     last_accessed: row.last_accessed || undefined,
+    writer_identity: row.writer_identity as any,
   };
 }
 
@@ -206,15 +214,16 @@ export function updateSemanticAccess(id: string): void {
 // ===== PROCEDURAL MEMORY =====
 export async function writeProcedural(memory: Omit<ProceduralMemory, 'id' | 'embedding' | 'success_rate' | 'use_count' | 'created_at' | 'updated_at'>): Promise<string> {
   const id = uuidv4();
-  const searchText = `${memory.name} ${memory.description || ''} ${memory.steps} ${memory.triggers || ''}`;
-  const embedding = await generateEmbedding(searchText);
+  // Embed only the procedure steps (the actual workflow content) for semantic search
+  // Not name+description+triggers which are metadata
+  const embedding = await generateEmbedding(memory.steps);
   const timestamp = now();
 
   const stmt = db.prepare(`
-    INSERT INTO procedural_memory (id, name, description, steps, triggers, embedding, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO procedural_memory (id, name, description, steps, triggers, embedding, created_at, updated_at, writer_identity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(id, memory.name, memory.description || null, memory.steps, memory.triggers || null, embeddingToBuffer(embedding), timestamp, timestamp);
+  stmt.run(id, memory.name, memory.description || null, memory.steps, memory.triggers || null, embeddingToBuffer(embedding), timestamp, timestamp, memory.writer_identity || null);
 
   return id;
 }
@@ -238,6 +247,7 @@ export async function searchProcedural(query: string, limit = 5, threshold = EMB
       use_count: row.use_count,
       created_at: row.created_at,
       updated_at: row.updated_at,
+      writer_identity: row.writer_identity as any,
       similarity,
     })
   );
