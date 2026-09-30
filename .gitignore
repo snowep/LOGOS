@@ -14,3 +14,4 @@ apps/api/server.log
 apps/api/storage/system/logos.db
 apps/api/storage/system/logos.db-shm
 apps/api/storage/system/logos.db-wal
+apps/api/storage/
