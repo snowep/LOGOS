@@ -1,14 +1,24 @@
-import { pipeline, env } from '@xenova/transformers';
-
-env.allowLocalModels = true;
-env.useBrowserCache = false;
+// ESM-only package - use dynamic import
+let pipeline: any = null;
+let env: any = null;
 
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const EMBEDDING_DIM = 384;
 
 let embedder: any = null;
 
+async function loadTransformers() {
+  if (!pipeline) {
+    const transformers = await import('@xenova/transformers');
+    pipeline = transformers.pipeline;
+    env = transformers.env;
+    env.allowLocalModels = true;
+    env.useBrowserCache = false;
+  }
+}
+
 export async function getEmbedder() {
+  await loadTransformers();
   if (!embedder) {
     console.log('Loading embedding model...');
     embedder = await pipeline('feature-extraction', MODEL_NAME, {

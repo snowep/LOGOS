@@ -9,6 +9,7 @@ import {
   getOrCreateDocumentIdentity,
   getDocumentByPath,
   recordDocumentEvent,
+  getDocumentIdentity,
   WriterIdentity,
 } from '../db';
 import { config } from '../config';
@@ -42,8 +43,25 @@ function determineWriter(relativePath: string, contentHash: string): WriterIdent
   return isLogosWrite(relativePath, contentHash) ? 'LOGOS' : 'USER';
 }
 
-// Rename detection: track unlink events temporarily
-const pendingDeletes = new Map<string, { documentId: string; hash: string; timestamp: number }>();
+// Rename/move detection: track unlink events temporarily
+interface PendingDelete {
+  documentId: string;
+  hash: string;
+  path: string;
+  timestamp: number;
+}
+
+const pendingDeletes = new Map<string, PendingDelete>();
+
+// Track pending adds for move detection
+interface PendingAdd {
+  documentId: string;
+  hash: string;
+  path: string;
+  timestamp: number;
+}
+
+const pendingAdds = new Map<string, PendingAdd>();
 
 let watcher: FSWatcher | null = null;
 
@@ -57,11 +75,13 @@ export function startWatcher(): FSWatcher {
   watcher = chokidar.watch(vaultPath, {
     ignored: (p: string) => {
       const normalized = p.replace(/\\/g, '/');
-      if (/[/\\]\../.test(normalized)) return true;
+      if (/[/\\]\\../.test(normalized)) return true;
       if (/node_modules/.test(normalized)) return true;
-      if (/\.tmp$/.test(normalized)) return true;
+      if (/\\.tmp$/.test(normalized)) return true;
       if (/~$/.test(normalized)) return true;
-      if (/\.log$/.test(normalized)) return true;
+      if (/\\.log$/.test(normalized)) return true;
+      if (/\\.bak$/.test(normalized)) return true;
+      if (/\\.db(-wal|-shm)?$/.test(normalized)) return true;
       if (!normalized.endsWith('.md') && !normalized.endsWith('.markdown')) {
         try {
           return !fs.statSync(p).isDirectory();
@@ -110,8 +130,10 @@ export function startWatcher(): FSWatcher {
           pendingDeletes.set(doc.id, {
             documentId: doc.id,
             hash: contentHash,
+            path: relativePath,
             timestamp: Date.now(),
           });
+          // Bounded interval for rename/move detection
           setTimeout(() => {
             const pending = pendingDeletes.get(doc.id);
             if (pending && pending.hash === contentHash) {
@@ -140,15 +162,24 @@ export function startWatcher(): FSWatcher {
       } else if (content !== null) {
         // Check if this is a rename (add with matching hash from recent unlink)
         let matchedRename = false;
+        let matchedMove = false;
         if (event === 'add') {
           for (const [delId, delInfo] of pendingDeletes.entries()) {
             if (delInfo.hash === contentHash) {
               const oldDoc = db.prepare('SELECT * FROM documents WHERE id = ?').get(delId) as any;
               if (oldDoc) {
-                matchedRename = true;
+                // Check if parent directory changed (move) vs same directory (rename)
+                const oldDir = path.dirname(delInfo.path);
+                const newDir = path.dirname(relativePath);
+                if (oldDir === newDir) {
+                  matchedRename = true;
+                  eventType = 'renamed';
+                } else {
+                  matchedMove = true;
+                  eventType = 'moved';
+                }
                 documentId = delId;
                 previousPath = oldDoc.path;
-                eventType = 'renamed';
                 const now = Date.now();
                 db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relativePath, now, delId);
                 version = oldDoc.version;
@@ -159,7 +190,7 @@ export function startWatcher(): FSWatcher {
           }
         }
 
-        if (!matchedRename) {
+        if (!matchedRename && !matchedMove) {
           const doc = getOrCreateDocumentIdentity(relativePath, content, writer);
           documentId = doc.id;
           version = doc.version;

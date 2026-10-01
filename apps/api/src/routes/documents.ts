@@ -170,6 +170,7 @@ router.post(
         created: result.created,
         updated: result.updated,
         deleted: result.deleted,
+        renamed: result.renamed,
         conflicts: result.conflicts,
         conflictDetails: result.conflictDetails,
         skipped: result.skipped,
@@ -177,6 +178,7 @@ router.post(
       });
     } catch (err) {
       next(err);
+      return;
     }
   }
 );
@@ -191,6 +193,7 @@ router.post('/api/vault/sync', validate({ body: reconcileBody }), async (req, re
       created: result.created,
       updated: result.updated,
       deleted: result.deleted,
+      renamed: result.renamed,
       conflicts: result.conflicts,
       conflictDetails: result.conflictDetails,
       skipped: result.skipped,
@@ -198,6 +201,7 @@ router.post('/api/vault/sync', validate({ body: reconcileBody }), async (req, re
     });
   } catch (err) {
     next(err);
+    return;
   }
 });
 

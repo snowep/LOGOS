@@ -6,6 +6,7 @@ import {
   getOrCreateDocumentIdentity,
   getDocumentByPath,
   recordDocumentEvent,
+  getDocumentByHash,
   resolveSafePath,
 } from '../db';
 import { config } from '../config';
@@ -15,6 +16,7 @@ export interface ReconcileResult {
   created: number;
   updated: number;
   deleted: number;
+  renamed: number;
   conflicts: number;
   skipped: number;
   conflictDetails: Array<{
@@ -54,6 +56,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
   let created = 0;
   let updated = 0;
   let deleted = 0;
+  let renamed = 0;
   let skipped = 0;
   const conflictDetails: ReconcileResult['conflictDetails'] = [];
 
@@ -69,6 +72,18 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     const existingDoc = getDocumentByPath(relPath);
 
     if (!existingDoc) {
+      // Check if this file's hash matches an existing document (rename/move)
+      const docByHash = getDocumentByHash(contentHash);
+      if (docByHash) {
+        // This is a rename/move - update path
+        const previousPath = docByHash.path;
+        const now = Date.now();
+        db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relPath, now, docByHash.id);
+        recordDocumentEvent(docByHash.id, 'renamed', relPath, docByHash.version, contentHash, 'USER', previousPath, { size: fileStats.size });
+        renamed++;
+        continue;
+      }
+
       const doc = getOrCreateDocumentIdentity(relPath, content, 'USER');
       recordDocumentEvent(doc.id, 'created', relPath, 1, contentHash, 'USER', undefined, { size: fileStats.size });
       created++;
@@ -117,6 +132,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     created,
     updated,
     deleted,
+    renamed,
     conflicts: conflictDetails.length,
     skipped,
     conflictDetails,
@@ -127,6 +143,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     created,
     updated,
     deleted,
+    renamed,
     conflicts: result.conflicts,
     skipped,
     timestamp: new Date().toISOString(),
