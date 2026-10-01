@@ -30,9 +30,12 @@ import {
   Computer as SystemIcon,
   ChevronLeft,
   ChevronRight,
+  DarkMode as DarkModeIcon,
+  LightMode as LightModeIcon,
 } from '@mui/icons-material';
 import { usePathname } from 'next/navigation';
 import { layout } from '@/theme/tokens';
+import { useThemeMode } from '@/theme/ThemeRegistry';
 
 const DRAWER_WIDTH_COLLAPSED = layout.railCollapsed; // 64
 const DRAWER_WIDTH_EXPANDED = layout.railExpanded;   // 248
@@ -63,6 +66,7 @@ export default function Shell({ children }: ShellProps) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const pathname = usePathname();
+  const { mode, toggleTheme } = useThemeMode();
 
   useEffect(() => {
     const handleResize = () => {
@@ -218,8 +222,13 @@ export default function Shell({ children }: ShellProps) {
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <IconButton size="small" sx={{ color: 'text.secondary', '&:hover': { backgroundColor: 'action.hover' } }} aria-label="Theme toggle">
-                <ChevronRight fontSize="medium" />
+              <IconButton
+                size="small"
+                onClick={toggleTheme}
+                sx={{ color: 'text.secondary', '&:hover': { backgroundColor: 'action.hover' } }}
+                aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {mode === 'dark' ? <LightModeIcon fontSize="medium" /> : <DarkModeIcon fontSize="medium" />}
               </IconButton>
               <Box
                 sx={{

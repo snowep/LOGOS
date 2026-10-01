@@ -86,7 +86,7 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
         .then((data) => {
           const transformedProjects: Project[] = (data.documents || []).map((doc: any) => ({
             id: doc.id,
-            name: doc.path.replace(/\.md$/, "").replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()),
+            name: doc.path.replace(/\.md$/, "").replace(/-/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase()),
             description: `Last updated: ${new Date(doc.updated_at).toLocaleDateString()}`,
             lastActivity: doc.path,
             lastActivityTime: new Date(doc.updated_at).toISOString(),

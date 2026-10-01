@@ -2,22 +2,40 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-export type VaultEventType = 'file-change' | 'sync-complete' | 'conflict' | 'error';
+export type WriterIdentity = 'USER' | 'LOGOS' | 'AGENT' | 'AUTOMATION';
+export type FileChangeEvent = 'created' | 'modified' | 'deleted' | 'renamed' | 'moved';
+export type VaultEventType = 'file-change' | 'reconcile-complete';
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
-export interface VaultEvent {
-  event: string;
+export interface FileChangeEventData {
+  event: FileChangeEvent;
   documentId: string;
   path: string;
   version: number;
   hash: string;
-  writer: 'USER' | 'LOGOS' | 'AGENT' | 'AUTOMATION';
+  writer: WriterIdentity;
   timestamp: string;
   previousPath?: string;
 }
 
+export interface ReconcileCompleteEventData {
+  event: 'reconcile-complete';
+  path: string;
+  created: number;
+  updated: number;
+  deleted: number;
+  renamed: number;
+  conflicts: number;
+  skipped: number;
+  scanQuality: 'COMPLETE' | 'PARTIAL' | 'FAILED';
+  timestamp: string;
+}
+
+export type VaultEvent = FileChangeEventData | ReconcileCompleteEventData;
+
 export interface UseVaultEventsOptions {
-  onEvent?: (event: VaultEvent) => void;
+  onFileChange?: (event: FileChangeEventData) => void;
+  onReconcileComplete?: (event: ReconcileCompleteEventData) => void;
   onConnectionChange?: (state: ConnectionState) => void;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -25,7 +43,8 @@ export interface UseVaultEventsOptions {
 
 export function useVaultEvents(options: UseVaultEventsOptions = {}) {
   const {
-    onEvent,
+    onFileChange,
+    onReconcileComplete,
     onConnectionChange,
     reconnectInterval = 3000,
     maxReconnectAttempts = 10,
@@ -55,7 +74,8 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
     if (!isMountedRef.current) return;
 
     try {
-      const eventSource = new EventSource('/api/vault/events');
+      // SSE endpoint is at /events/vault (proxied from /api/events/vault)
+      const eventSource = new EventSource('/events/vault');
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -65,63 +85,27 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
         reconnectAttemptsRef.current = 0;
       };
 
-      eventSource.onmessage = (messageEvent) => {
-        if (!isMountedRef.current) return;
-        try {
-          const event: VaultEvent = JSON.parse(messageEvent.data);
-          setLastEvent(event);
-          setEventCount((prev) => prev + 1);
-          onEvent?.(event);
-        } catch (err) {
-          console.warn('[useVaultEvents] Failed to parse event:', err);
-        }
-      };
-
       eventSource.addEventListener('file-change', (event: MessageEvent) => {
         if (!isMountedRef.current) return;
         try {
-          const vaultEvent: VaultEvent = JSON.parse(event.data);
-          setLastEvent(vaultEvent);
+          const fileChangeEvent: FileChangeEventData = JSON.parse(event.data);
+          setLastEvent(fileChangeEvent);
           setEventCount((prev) => prev + 1);
-          onEvent?.(vaultEvent);
+          onFileChange?.(fileChangeEvent);
         } catch (err) {
           console.warn('[useVaultEvents] Failed to parse file-change event:', err);
         }
       });
 
-      eventSource.addEventListener('sync-complete', (event: MessageEvent) => {
+      eventSource.addEventListener('reconcile-complete', (event: MessageEvent) => {
         if (!isMountedRef.current) return;
         try {
-          const vaultEvent: VaultEvent = JSON.parse(event.data);
-          setLastEvent(vaultEvent);
+          const reconcileEvent: ReconcileCompleteEventData = JSON.parse(event.data);
+          setLastEvent(reconcileEvent);
           setEventCount((prev) => prev + 1);
-          onEvent?.(vaultEvent);
+          onReconcileComplete?.(reconcileEvent);
         } catch (err) {
-          console.warn('[useVaultEvents] Failed to parse sync-complete event:', err);
-        }
-      });
-
-      eventSource.addEventListener('conflict', (event: MessageEvent) => {
-        if (!isMountedRef.current) return;
-        try {
-          const vaultEvent: VaultEvent = JSON.parse(event.data);
-          setLastEvent(vaultEvent);
-          setEventCount((prev) => prev + 1);
-          onEvent?.(vaultEvent);
-        } catch (err) {
-          console.warn('[useVaultEvents] Failed to parse conflict event:', err);
-        }
-      });
-
-      eventSource.addEventListener('error', (event: MessageEvent) => {
-        if (!isMountedRef.current) return;
-        try {
-          const vaultEvent: VaultEvent = JSON.parse(event.data);
-          setLastEvent(vaultEvent);
-          setEventCount((prev) => prev + 1);
-          onEvent?.(vaultEvent);
-        } catch (err) {
-          console.warn('[useVaultEvents] Failed to parse error event:', err);
+          console.warn('[useVaultEvents] Failed to parse reconcile-complete event:', err);
         }
       });
 
@@ -152,7 +136,7 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
       setConnectionState('error');
       onConnectionChange?.('error');
     }
-  }, [cleanup, onEvent, onConnectionChange, reconnectInterval, maxReconnectAttempts]);
+  }, [cleanup, onFileChange, onReconcileComplete, onConnectionChange, reconnectInterval, maxReconnectAttempts]);
 
   useEffect(() => {
     isMountedRef.current = true;

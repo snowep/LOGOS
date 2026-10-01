@@ -498,17 +498,19 @@ export default function ChatPage() {
                     {message.pendingAction && (
                       <Box sx={{ mt: 1 }}>
                         <Button
-                          variant="contained"
-                          color="error"
-                          size="small"
-                          sx={{ mb: 1 }}
-                          onClick={() => {
-                            setPendingAction(message.pendingAction);
-                            setApprovalModalOpen(true);
-                          }}
-                        >
-                          Review Action
-                        </Button>
+                                                  variant="contained"
+                                                  color="error"
+                                                  size="small"
+                                                  sx={{ mb: 1 }}
+                                                  onClick={() => {
+                                                    if (message.pendingAction) {
+                                                      setPendingAction(message.pendingAction);
+                                                      setApprovalModalOpen(true);
+                                                    }
+                                                  }}
+                                                >
+                                                  Review Action
+                                                </Button>
                       </Box>
                     )}
                     {(message.sources || message.reasoning) && (

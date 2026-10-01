@@ -37,9 +37,9 @@ export const config = {
   },
   logosWriteCleanup: parseInt(process.env.LOGOS_WRITE_CLEANUP_MS || '5000', 10),
   maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10),
-  version: '0.3.1',
+  version: '0.4.2',
   name: 'logos',
-  activePhase: 'P0.3.1',
+  activePhase: 'P0.4.2',
 } as const;
 
 export type Config = typeof config;

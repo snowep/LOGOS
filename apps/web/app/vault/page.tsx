@@ -46,7 +46,7 @@ import {
 } from '@mui/icons-material';
 import { marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
-import { useVaultEvents, VaultEvent, ConnectionState } from '@/hooks/useVaultEvents';
+import { useVaultEvents, FileChangeEventData, ReconcileCompleteEventData, ConnectionState } from '@/hooks/useVaultEvents';
 
 // Define knowledge categories with const assertions for literal types
 const knowledgeCategories = [
@@ -132,15 +132,21 @@ function VaultContent() {
 
   // SSE connection
   const { connectionState, lastEvent, eventCount, reconnect, disconnect } = useVaultEvents({
-    onEvent: (event: VaultEvent) => {
+    onFileChange: (event: FileChangeEventData) => {
       console.log('[Vault] SSE event received:', event);
       // Invalidate and refetch document list on file changes
-      if (event.event === 'file-change' || event.event === 'sync-complete') {
+      if (event.event === 'created' || event.event === 'modified' || event.event === 'deleted' || event.event === 'renamed' || event.event === 'moved') {
         fetchDocuments();
       }
       // If the currently selected document was modified, refetch its content
       if (selectedDocument && (event.documentId === selectedDocument.id || event.path === selectedDocument.path)) {
         fetchDocumentContent(selectedDocument.id);
+      }
+    },
+    onReconcileComplete: (event: ReconcileCompleteEventData) => {
+      console.log('[Vault] Reconcile complete:', event);
+      if (event.scanQuality !== 'FAILED') {
+        fetchDocuments();
       }
     },
     onConnectionChange: (state) => {
@@ -271,8 +277,13 @@ function VaultContent() {
 
   // Handle SSE events - refetch on relevant changes
   useEffect(() => {
-    if (lastEvent && (lastEvent.event === 'file-change' || lastEvent.event === 'sync-complete')) {
-      // The onEvent callback handles refetching
+    if (lastEvent) {
+      // Check if it's a file change event that should trigger refetch
+      if ('event' in lastEvent && (lastEvent.event === 'created' || lastEvent.event === 'modified' || lastEvent.event === 'deleted' || lastEvent.event === 'renamed' || lastEvent.event === 'moved')) {
+        // The onFileChange callback handles refetching
+      } else if (lastEvent.event === 'reconcile-complete') {
+        // The onReconcileComplete callback handles refetching
+      }
     }
   }, [lastEvent]);
 

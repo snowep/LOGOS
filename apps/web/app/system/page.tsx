@@ -121,7 +121,7 @@ export default async function SystemPage() {
           }}>
             {logs.recent
               .map(
-                (log) =>
+                (log: any) =>
                   `[${new Date(log.timestamp).toISOString()}] ${log.level.toUpperCase()}: ${log.message}`
               )
               .join("\n")}

@@ -329,6 +329,26 @@ export function getOrCreateDocumentIdentity(
     `).run(filePath, hash, updated.version, now, writer, size, existing.id);
     return updated;
   } else {
+    // Check if there's a tombstoned document with this path that we can resurrect
+    const tombstoned = db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NOT NULL').get(filePath) as DocumentIdentity | undefined;
+    if (tombstoned) {
+      // Resurrect the tombstoned document with same stable UUID
+      const resurrected: DocumentIdentity = {
+        ...tombstoned,
+        path: filePath,
+        current_hash: hash,
+        version: tombstoned.version + 1,
+        updated_at: now,
+        last_writer: writer,
+        size,
+        deleted_at: null,
+      };
+      db.prepare(`
+        UPDATE documents SET path = ?, current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?, deleted_at = NULL
+        WHERE id = ?
+      `).run(filePath, hash, resurrected.version, now, writer, size, tombstoned.id);
+      return resurrected;
+    }
     // Create new document with stable UUID
     const docId = generateDocumentId(filePath);
     const created: DocumentIdentity = {
@@ -343,9 +363,9 @@ export function getOrCreateDocumentIdentity(
       size,
     };
     db.prepare(`
-      INSERT INTO documents (id, path, current_hash, version, created_at, updated_at, last_writer, size)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(docId, filePath, hash, 1, now, now, writer, size);
+      INSERT INTO documents (id, path, current_hash, version, created_at, updated_at, deleted_at, last_writer, size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(docId, filePath, hash, 1, now, now, null, writer, size);
     return created;
   }
 }
@@ -355,6 +375,14 @@ export function getDocumentIdentity(docId: string): DocumentIdentity | null {
 }
 
 export function getDocumentByPath(path: string): DocumentIdentity | null {
+  return db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NULL').get(path) as DocumentIdentity | null;
+}
+
+export function getActiveDocumentByPath(path: string): DocumentIdentity | null {
+  return getDocumentByPath(path);
+}
+
+export function getDocumentIncludingTombstone(path: string): DocumentIdentity | null {
   return db.prepare('SELECT * FROM documents WHERE path = ?').get(path) as DocumentIdentity | null;
 }
 

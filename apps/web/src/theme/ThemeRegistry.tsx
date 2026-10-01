@@ -13,13 +13,15 @@ type ThemeContextValue = {
   setMode: (mode: PaletteMode) => void;
 };
 
-const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
+const ThemeContext = createContext<ThemeContextValue>({
+  mode: 'dark',
+  theme: darkTheme,
+  toggleTheme: () => {},
+  setMode: () => {},
+});
 
 export function useThemeMode() {
   const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error('useThemeMode must be used within a ThemeRegistry');
-  }
   return context;
 }
 
@@ -34,26 +36,19 @@ export function ThemeRegistry({
   defaultMode = 'dark',
   storageKey = 'logos-theme-mode',
 }: ThemeRegistryProps) {
-  const [mode, setModeState] = useState<PaletteMode>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem(storageKey) as PaletteMode | null;
-      if (stored) return stored;
-      // Check system preference
-      if (window.matchMedia('(prefers-color-scheme: light)').matches) {
-        return 'light';
-      }
-    }
-    return defaultMode;
-  });
-
+  const [mode, setModeState] = useState<PaletteMode>(defaultMode);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
-    const stored = localStorage.getItem(storageKey) as PaletteMode | null;
-    if (stored) {
+    // First launch behaviour: dark unless an explicit stored preference exists.
+    // We deliberately do NOT consult prefers-color-scheme.
+    const stored = typeof window !== 'undefined'
+      ? (localStorage.getItem(storageKey) as PaletteMode | null)
+      : null;
+    if (stored === 'light' || stored === 'dark') {
       setModeState(stored);
     }
+    setMounted(true);
   }, [storageKey]);
 
   useEffect(() => {
@@ -72,15 +67,6 @@ export function ThemeRegistry({
   const setMode = (newMode: PaletteMode) => {
     setModeState(newMode);
   };
-
-  if (!mounted) {
-    return (
-      <MuiThemeProvider theme={themes[defaultMode]}>
-        <CssBaseline />
-        {children}
-      </MuiThemeProvider>
-    );
-  }
 
   return (
     <ThemeContext.Provider value={{ mode, theme, toggleTheme, setMode }}>

@@ -1,277 +1,322 @@
-# LOGOS — UI Corrective Directive for P0.4.1
+# LOGOS — UI Corrective Directive for P0.4.2
 
-## Product rule
+## Product direction
 
-The interface must describe the system that actually exists today.
+P0.4.2 should move the UI from an implementation/admin dashboard toward a calm personal workspace.
 
-P0.4.1 is still primarily a vault synchronization phase.
+Use:
 
-Do not fabricate projects, memory, metrics, integrations, statuses, or future capabilities.
+```text
+docs/04_GENIE_INSPIRED_LOGOS_UI_BRIEF.md
+```
+
+as the reference for the conversational interaction pattern.
+
+Do not copy Genie branding, artwork, exact copy, or proprietary visual assets.
 
 ---
 
 ## 1. Shell
 
-File:
+`apps/web/app/layout.tsx` owns the only Shell.
 
-```text
-apps/web/app/components/Shell.tsx
-```
-
-Rules:
-
-- root `app/layout.tsx` owns the only Shell,
-- pages render content only,
-- desktop rail = 64 px collapsed / 248 px expanded,
-- top bar = 56 px,
-- content max width = 1120 px,
-- one semantic main region,
-- theme toggle must call `useThemeMode()`.
-
-Remove the extra Shell wrapper from `apps/web/app/vault/page.tsx`.
-
----
-
-## 2. Vault
-
-File:
-
-```text
-apps/web/app/vault/page.tsx
-```
+No page may render another Shell.
 
 Keep:
 
 ```text
-left 200 px
-middle 320 px
-right remaining
+collapsed rail = 64px
+expanded rail = 248px
+top bar = 56px
+content max = 1120px
 ```
 
-The page should show:
-
-- real Markdown files,
-- real document metadata,
-- real content preview,
-- real sync connection state.
-
-The page must not claim these are operational when they are not:
-
-```text
-Edit
-Rename
-Move
-Archive
-Show related
-Find conflicts
-```
-
-Remove them or render disabled/unavailable states.
-
-Do not use `prompt()` or `confirm()` as unfinished product interactions.
-
-Use centralized theme tokens. Do not hardcode the old indigo/gray UI system.
+The theme toggle must actually call `useThemeMode()`.
 
 ---
 
-## 3. Vault preview
+## 2. Chat: implement the new primary workspace
 
-Real content must be fetched from:
+Use this desktop pattern:
 
 ```text
-/api/documents/{id}
+┌───────────────┬───────────────────────────────────────────────────────────┐
+│ Recent chats  │ Conversation                                             │
+│               │                                                           │
+│ + New chat    │ user message                                              │
+│               │ LOGOS response                                            │
+│ Today         │                                                           │
+│ • item        │ contextual cards                                          │
+│ • item        │                                                           │
+│ Yesterday     │                                                           │
+│ • item        │                                                           │
+│               ├───────────────────────────────────────────────────────────┤
+│               │ [ + ]  Ask LOGOS...                              [ Send ] │
+└───────────────┴───────────────────────────────────────────────────────────┘
 ```
 
-Markdown should be sanitized before `dangerouslySetInnerHTML`.
+Internal conversation rail target: roughly 280–320px desktop.
 
-Do not expose full machine paths unless explicitly requested.
+The main conversation area must remain visually dominant.
+
+Mobile: convert the conversation rail to a drawer.
 
 ---
 
-## 4. Memory
+## 3. Chat truthfulness
 
-File:
+Do not seed the UI with fake conversation records.
 
-```text
-apps/web/app/memory/page.tsx
-```
-
-When the API fails:
+The following must come from real data or be honestly unavailable:
 
 ```text
-Error loading memories
-Retry
+recent conversations
+context
+vault notes
+council sessions
+decisions
+tasks
+memories
 ```
 
-Do not insert seed/demo records.
+Do not expose raw internal model reasoning in the normal UI.
 
-Until real memory query contracts are complete, an honest empty state is preferable to fabricated populated data.
+Prefer:
+
+```text
+Sources
+Why this result
+Relevant context
+```
+
+over a raw `reasoning` field.
 
 ---
 
-## 5. System
+## 4. Context/result cards
 
-File:
+Use MUI `Card`/`Paper`/`List`/`Chip` for meaningful records.
+
+Examples:
 
 ```text
-apps/web/app/system/page.tsx
+Vault note
+Task
+Council session
+Memory proposal
+Decision
 ```
 
-Rebuild with MUI only.
+Cards must be backed by real state or be omitted.
 
-Use:
+Buttons must execute real operations or be disabled with a clear unavailable explanation.
+
+---
+
+## 5. Vault
+
+Keep the existing three-pane knowledge structure only if it remains useful:
 
 ```text
-Container / Box / Stack / Grid / Paper / Typography / Alert / List / Table / Chip
+200px knowledge
+320px document list
+remaining preview
 ```
 
-or other official MUI components as appropriate.
+But ensure the normal document list contains only active records.
 
-No raw page-level `div`, `section`, `h1`, `h2`, `pre` styling system.
-
-All semantic colors come from the theme.
-
-The System page should accurately distinguish:
+Remove stale handlers using:
 
 ```text
-JavaScript fallback retrieval
+prompt()
+confirm()
+console.log()
 ```
 
-from:
+Delete dead code rather than leaving it behind.
+
+Keep sanitized Markdown rendering.
+
+Replace hardcoded colors with valid MUI theme paths.
+
+---
+
+## 6. Memory
+
+No fake fallback data.
+
+On API failure:
 
 ```text
-sqlite-vec active
+Unable to load memories.
+[Retry]
+```
+
+When there are no records:
+
+```text
+Nothing here yet.
 ```
 
 ---
 
-## 6. Settings
+## 7. System
 
-File:
+Rebuild with official MUI components.
+
+Do not use page-level raw HTML + inline style as a second visual system.
+
+Show real values only.
+
+System may expose technical details because it is an advanced area, but values must be sourced from real runtime state.
+
+---
+
+## 8. Settings
+
+Only show controls that are actually implemented.
+
+Every control must be one of:
 
 ```text
-apps/web/app/settings/page.tsx
-```
-
-Do not present:
-
-```text
-checked={true}
-onChange={() => {}}
-```
-
-as a real setting.
-
-Use one of:
-
-```text
-real backed setting
+real + persisted
 ```
 
 or:
 
 ```text
-disabled + unavailable note
+disabled + unavailable
 ```
 
-Remove machine-specific paths.
-
-Appearance controls must use the shared ThemeRegistry.
+Remove hardcoded machine paths.
 
 ---
 
-## 7. Theme
+## 9. Theme
 
-Files:
-
-```text
-apps/web/src/theme/tokens.ts
-apps/web/src/theme/theme.ts
-apps/web/src/theme/ThemeRegistry.tsx
-```
-
-Required behavior:
+First launch:
 
 ```text
-no stored preference -> dark
-stored preference -> use it
+dark
 ```
 
-Do not silently select light mode from OS preference before the user explicitly changes the product setting.
+No OS light-mode auto-selection without an explicit stored product preference.
 
-Remove unused purple/indigo secondary branding.
+The visible theme button must actually toggle and persist the mode.
 
-Keep the temporary warm accent only until the final LOGOS brand palette is defined.
+Remove purple/indigo product colors.
+
+Use the warm temporary accent:
+
+```text
+#B87945
+```
+
+and the existing semantic colors.
 
 ---
 
-## 8. Contract alignment
+## 10. Data surfaces
 
-The browser and backend must share the same event vocabulary:
-
-```text
-created
-modified
-deleted
-renamed
-moved
-reconcile-complete
-```
-
-Do not maintain a parallel stale contract such as:
+Normal UI should answer:
 
 ```text
-add
-change
-unlink
-unlinkDir
+What matters?
 ```
+
+Advanced System/Developer surfaces may answer:
+
+```text
+How does the machine work?
+```
+
+Do not put token counts, raw event names, worker IDs, implementation paths, or fabricated health claims in normal user surfaces.
 
 ---
 
-## 9. Truthfulness scan
+## 11. Accessibility
 
-Before completion search for:
-
-```text
-mock
-fake
-demo
-placeholder
-hardcoded
-localhost
-D:\\
-ORION
-JARVIS
-99.9%
-1.2k req/s
-System Operational
-Continue editing
-```
-
-Every remaining occurrence must be removed or explicitly documented as development-only.
-
----
-
-## 10. Accessibility
-
-Verify:
+Required:
 
 - keyboard navigation,
 - visible focus,
-- icon-only controls have `aria-label`,
-- correct heading hierarchy,
-- form labels,
-- no information conveyed only by color,
+- `aria-label` on icon-only controls,
+- readable heading hierarchy,
 - sufficient contrast,
-- no horizontal scrolling at required viewport sizes.
+- no color-only meaning,
+- no horizontal scroll.
 
-Required sizes:
+Required viewport checks:
 
 ```text
-1440 x 900
-1280 x 800
-1024 x 768
-768 x 1024
-390 x 844
+1440x900
+1280x800
+1024x768
+768x1024
+390x844
 ```
+
+---
+
+## 12. Final UI verification
+
+Hermes must manually inspect:
+
+```text
+/
+/chat
+/vault
+/memory
+/system
+/settings
+```
+
+and compare each screen against:
+
+```text
+03_UI_CORRECTIVE_DIRECTIVE.md
+04_GENIE_INSPIRED_LOGOS_UI_BRIEF.md
+```
+
+The final report must identify any screen that remains intentionally incomplete.
+
+---
+
+## 12. Required UI verification before acceptance
+
+Use:
+
+```text
+06_UI_COMPONENT_TEST_MATRIX.md
+07_RESPONSIVE_SIZE_AUDIT.md
+```
+
+No UI-affecting commit is accepted from a desktop-only visual check.
+
+For every changed component, record:
+
+```text
+component
+route
+viewport
+state
+expected
+actual
+runtime errors
+accessibility
+truthfulness
+PASS/FAIL
+```
+
+At minimum, rerun:
+
+```text
+320x568
+390x844
+768x1024
+1024x768
+1440x900
+1920x1080
+```
+
+Then rerun all mandatory viewport sizes from the responsive audit before phase acceptance.

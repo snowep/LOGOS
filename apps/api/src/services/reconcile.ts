@@ -26,6 +26,7 @@ export interface ReconcileResult {
     fileHash: string;
     dbHash: string;
   }>;
+  scanQuality: 'COMPLETE' | 'PARTIAL' | 'FAILED';
 }
 
 function scanMarkdownFiles(dir: string, basePath: string): string[] {
@@ -70,6 +71,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
   let deleted = 0;
   let renamed = 0;
   let skipped = 0;
+  let readErrors = 0;
   const conflictDetails: ReconcileResult['conflictDetails'] = [];
 
   const seenPaths = new Set<string>();
@@ -96,6 +98,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     } catch (err: any) {
       // Read errors do NOT become deletions - skip and log
       console.log(`Reconcile: could not read ${relPath}:`, err.message);
+      readErrors++;
       skipped++;
       continue;
     }
@@ -191,6 +194,16 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     }
   }
 
+  // Determine scan quality
+  let scanQuality: 'COMPLETE' | 'PARTIAL' | 'FAILED' = 'COMPLETE';
+  if (readErrors > 0 && readErrors < markdownFiles.length) {
+    scanQuality = 'PARTIAL';
+  } else if (readErrors >= markdownFiles.length && markdownFiles.length > 0) {
+    scanQuality = 'FAILED';
+  } else if (markdownFiles.length === 0) {
+    scanQuality = 'COMPLETE'; // No files to scan
+  }
+
   const result: ReconcileResult = {
     created,
     updated,
@@ -199,6 +212,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     conflicts: conflictDetails.length,
     skipped,
     conflictDetails,
+    scanQuality,
   };
 
   broadcastEvent('reconcile-complete', {
@@ -209,6 +223,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     renamed,
     conflicts: result.conflicts,
     skipped,
+    scanQuality,
     timestamp: new Date().toISOString(),
   });
 

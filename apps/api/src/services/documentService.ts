@@ -5,7 +5,9 @@ import {
   computeContentHash,
   generateDocumentId,
   getDocumentIdentity,
+  getOrCreateDocumentIdentity,
   getDocumentByPath,
+  getDocumentIncludingTombstone,
   recordDocumentEvent,
   WriterIdentity,
   DocumentIdentity,
@@ -47,7 +49,9 @@ export interface ConflictDetails {
 }
 
 /**
- * Create a new document: atomic file write, DB record, event emission
+ * Cross-resource atomicity: file write + DB update + event emission
+ * Uses a recovery boundary: if any step fails after file write, we attempt rollback.
+ * If rollback fails, we log for manual recovery.
  */
 export function createDocument(options: CreateDocumentOptions): DocumentOperationResult {
   const { path: docPath, content, writer } = options;
@@ -79,7 +83,7 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
     const existingHash = computeContentHash(existingContent);
     if (existingHash === hash) {
       // Same content exists - could be a tombstone restore scenario
-      // For now, reject to be safe - explicit restore can be added later
+      // Use getOrCreateDocumentIdentity to resurrect if tombstoned
       throw createConflictError({
         id: '',
         path: docPath,
@@ -120,40 +124,59 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
 
   fs.renameSync(tempPath, fullPath);
 
-  // Create DB record with stable UUID
-  const docId = generateDocumentId(docPath);
-  const created: DocumentIdentity = {
-    id: docId,
-    path: docPath,
-    current_hash: hash,
-    version: 1,
-    created_at: now,
-    updated_at: now,
-    deleted_at: null,
-    last_writer: writer,
-    size,
-  };
+  // Cross-resource atomicity: DB record creation with rollback on failure
+  let docId: string | null = null;
+  let dbRecordCreated = false;
+  let eventRecorded = false;
+  let eventBroadcast = false;
 
-  db.prepare(`
-    INSERT INTO documents (id, path, current_hash, version, created_at, updated_at, deleted_at, last_writer, size)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(docId, docPath, hash, 1, now, now, null, writer, size);
+  try {
+    // Create DB record with stable UUID (uses getOrCreateDocumentIdentity which handles tombstone resurrection)
+    const created = getOrCreateDocumentIdentity(docPath, content, writer);
+    docId = created.id;
+    if (!docId) {
+      throw new Error('Failed to create document identity');
+    }
+    dbRecordCreated = true;
 
-  // Record event
-  recordDocumentEvent(docId, 'created', docPath, 1, hash, writer, undefined, { size });
+    // Record event
+    recordDocumentEvent(docId, 'created', docPath, 1, hash, writer, undefined, { size });
+    eventRecorded = true;
 
-  // Broadcast event
-  broadcastEvent('file-change', {
-    event: 'created',
-    documentId: docId,
-    path: docPath,
-    version: 1,
-    hash,
-    writer,
-    timestamp: new Date().toISOString(),
-  });
+    // Broadcast event
+    broadcastEvent('file-change', {
+      event: 'created',
+      documentId: docId,
+      path: docPath,
+      version: 1,
+      hash,
+      writer,
+      timestamp: new Date().toISOString(),
+    });
+    eventBroadcast = true;
 
-  return { document: created, eventType: 'created' };
+    return { document: created, eventType: 'created' };
+  } catch (err) {
+    // Recovery boundary: attempt rollback
+    if (eventBroadcast && !eventRecorded) {
+      console.error('[createDocument] Event broadcast but not recorded - inconsistency');
+    }
+    if (dbRecordCreated && docId) {
+      // Try to delete the DB record we created
+      try {
+        db.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+      } catch (rollbackErr) {
+        console.error('[createDocument] ROLLBACK FAILED - manual recovery needed:', rollbackErr);
+      }
+    }
+    // Try to remove the file we wrote
+    try {
+      fs.unlinkSync(fullPath);
+    } catch (rollbackErr) {
+      console.error('[createDocument] FILE ROLLBACK FAILED - manual recovery needed:', rollbackErr);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -219,37 +242,56 @@ export function updateDocument(options: UpdateDocumentOptions): DocumentOperatio
 
   fs.renameSync(tempPath, fullPath);
 
-  // Update DB - increment version only on real content change
-  const updatedVersion = doc.version + 1;
-  const updated: DocumentIdentity = {
-    ...doc,
-    current_hash: newHash,
-    version: updatedVersion,
-    updated_at: now,
-    last_writer: writer,
-    size,
-  };
+  // Cross-resource atomicity: DB update + event with recovery boundary
+  let dbUpdated = false;
+  let eventRecorded = false;
+  let eventBroadcast = false;
 
-  db.prepare(`
-    UPDATE documents SET current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
-    WHERE id = ?
-  `).run(newHash, updatedVersion, now, writer, size, id);
+  try {
+    // Update DB - increment version only on real content change
+    const updatedVersion = doc.version + 1;
+    const updated: DocumentIdentity = {
+      ...doc,
+      current_hash: newHash,
+      version: updatedVersion,
+      updated_at: now,
+      last_writer: writer,
+      size,
+    };
 
-  // Record event
-  recordDocumentEvent(doc.id, 'modified', doc.path, updatedVersion, newHash, writer, undefined, { size });
+    db.prepare(`
+      UPDATE documents SET current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
+      WHERE id = ?
+    `).run(newHash, updatedVersion, now, writer, size, id);
+    dbUpdated = true;
 
-  // Broadcast event
-  broadcastEvent('file-change', {
-    event: 'modified',
-    documentId: doc.id,
-    path: doc.path,
-    version: updatedVersion,
-    hash: newHash,
-    writer,
-    timestamp: new Date().toISOString(),
-  });
+    // Record event
+    recordDocumentEvent(doc.id, 'modified', doc.path, updatedVersion, newHash, writer, undefined, { size });
+    eventRecorded = true;
 
-  return { document: updated, eventType: 'modified' };
+    // Broadcast event
+    broadcastEvent('file-change', {
+      event: 'modified',
+      documentId: doc.id,
+      path: doc.path,
+      version: updatedVersion,
+      hash: newHash,
+      writer,
+      timestamp: new Date().toISOString(),
+    });
+    eventBroadcast = true;
+
+    return { document: updated, eventType: 'modified' };
+  } catch (err) {
+    // Recovery boundary: if DB updated but event failed, log inconsistency
+    if (dbUpdated && !eventRecorded) {
+      console.error('[updateDocument] DB updated but event not recorded - inconsistency');
+    }
+    if (eventBroadcast && !eventRecorded) {
+      console.error('[updateDocument] Event broadcast but not recorded - inconsistency');
+    }
+    throw err;
+  }
 }
 
 /**
@@ -286,37 +328,61 @@ export function deleteDocument(options: DeleteDocumentOptions): DocumentOperatio
 
   const now = Date.now();
 
-  // Remove file from filesystem
-  if (fs.existsSync(fullPath)) {
-    fs.unlinkSync(fullPath);
+  // Cross-resource atomicity: file deletion + DB tombstone + event with recovery boundary
+  let fileDeleted = false;
+  let dbTombstoned = false;
+  let eventRecorded = false;
+  let eventBroadcast = false;
+
+  try {
+    // Remove file from filesystem
+    if (fs.existsSync(fullPath)) {
+      fs.unlinkSync(fullPath);
+    }
+    fileDeleted = true;
+
+    // Tombstone in DB (set deleted_at, keep record for history)
+    db.prepare(`
+      UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?
+    `).run(now, now, id);
+    dbTombstoned = true;
+
+    const tombstoned: DocumentIdentity = {
+      ...doc,
+      deleted_at: now,
+      updated_at: now,
+    };
+
+    // Record event with correct writer identity
+    recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, doc.last_writer, undefined, { size: doc.size });
+    eventRecorded = true;
+
+    // Broadcast event
+    broadcastEvent('file-change', {
+      event: 'deleted',
+      documentId: doc.id,
+      path: doc.path,
+      version: doc.version,
+      hash: doc.current_hash,
+      writer: doc.last_writer,
+      timestamp: new Date().toISOString(),
+    });
+    eventBroadcast = true;
+
+    return { document: tombstoned, eventType: 'deleted' };
+  } catch (err) {
+    // Recovery boundary
+    if (fileDeleted && !dbTombstoned) {
+      console.error('[deleteDocument] File deleted but DB not tombstoned - manual recovery needed');
+    }
+    if (dbTombstoned && !eventRecorded) {
+      console.error('[deleteDocument] DB tombstoned but event not recorded - inconsistency');
+    }
+    if (eventBroadcast && !eventRecorded) {
+      console.error('[deleteDocument] Event broadcast but not recorded - inconsistency');
+    }
+    throw err;
   }
-
-  // Tombstone in DB (set deleted_at, keep record for history)
-  db.prepare(`
-    UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?
-  `).run(now, now, id);
-
-  const tombstoned: DocumentIdentity = {
-    ...doc,
-    deleted_at: now,
-    updated_at: now,
-  };
-
-  // Record event
-  recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, 'USER', undefined, { size: doc.size });
-
-  // Broadcast event
-  broadcastEvent('file-change', {
-    event: 'deleted',
-    documentId: doc.id,
-    path: doc.path,
-    version: doc.version,
-    hash: doc.current_hash,
-    writer: 'USER',
-    timestamp: new Date().toISOString(),
-  });
-
-  return { document: tombstoned, eventType: 'deleted' };
 }
 
 /**

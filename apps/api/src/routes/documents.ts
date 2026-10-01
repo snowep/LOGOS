@@ -14,63 +14,32 @@ import { reconcile } from '../services/reconcile';
 import { registerLogosWrite } from '../services/watcher';
 import { config } from '../config';
 import { validate } from '../middleware/validate';
+import { apiKeyAuth } from '../auth';
 import {
   createDocument,
   updateDocument,
   deleteDocument,
   getActiveDocument,
   ConflictDetails,
+  listActiveDocuments,
 } from '../services/documentService';
 
-// Actor context type for internal service calls
-export type ActorContext = 'HTTP' | 'INTERNAL' | 'AGENT' | 'SCHEDULER';
+// Writer removed from public API - server determines from context (HTTP -> USER)
+const createBody = z.object({
+  path: z.string().min(1).max(500),
+  content: z.string().max(10 * 1024 * 1024),
+});
 
-function determineWriterFromContext(context: ActorContext): WriterIdentity {
-  switch (context) {
-    case 'HTTP':
-      return 'USER';
-    case 'INTERNAL':
-      return 'LOGOS';
-    case 'AGENT':
-      return 'AGENT';
-    case 'SCHEDULER':
-      return 'AUTOMATION';
-    default:
-      return 'USER';
-  }
-}
+const updateBody = z.object({
+  content: z.string().max(10 * 1024 * 1024),
+  expectedVersion: z.number().int().min(0),
+  expectedHash: z.string().min(1),
+});
 
-// Internal service function that sets actor context
-export function writeDocumentInternal(
-  path: string,
-  content: string,
-  expectedVersion: number | undefined,
-  expectedHash: string | undefined,
-  context: ActorContext = 'INTERNAL'
-): ReturnType<typeof updateDocument> {
-  const writer = determineWriterFromContext(context);
-  return updateDocument({
-    id: '', // will be resolved by path
-    content,
-    expectedVersion: expectedVersion || 0,
-    expectedHash: expectedHash || '',
-    writer,
-  });
-}
-
-// Internal service function for document creation
-export function createDocumentInternal(
-  path: string,
-  content: string,
-  context: ActorContext = 'INTERNAL'
-): ReturnType<typeof createDocument> {
-  const writer = determineWriterFromContext(context);
-  return createDocument({
-    path,
-    content,
-    writer,
-  });
-}
+const deleteQuery = z.object({
+  expectedVersion: z.coerce.number().int().min(0),
+  expectedHash: z.string().min(1),
+});
 
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -83,20 +52,6 @@ const eventsQuery = z.object({
 
 const idParam = z.object({ id: z.string().min(1) });
 
-// Writer removed from public API - server determines from context (HTTP -> USER)
-const writeBody = z.object({
-  path: z.string().min(1).max(500),
-  content: z.string().max(10 * 1024 * 1024),
-  expectedVersion: z.number().int().min(0),
-  expectedHash: z.string().min(1),
-});
-
-const updateBody = z.object({
-  content: z.string().max(10 * 1024 * 1024),
-  expectedVersion: z.number().int().min(0),
-  expectedHash: z.string().min(1),
-});
-
 const reconcileBody = z.object({ path: z.string().optional() });
 
 const router = Router();
@@ -106,8 +61,9 @@ router.get(
   validate({ query: listQuery }),
   (req, res) => {
     const { limit, offset } = req.query as unknown as z.infer<typeof listQuery>;
-    const docs = db.prepare('SELECT * FROM documents ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(limit, offset);
-    const total = db.prepare('SELECT COUNT(*) as count FROM documents').get() as { count: number };
+    // Only return active (non-deleted) documents
+    const docs = listActiveDocuments(limit, offset);
+    const total = db.prepare('SELECT COUNT(*) as count FROM documents WHERE deleted_at IS NULL').get() as { count: number };
     res.json({ documents: docs, total: total.count, limit, offset });
   }
 );
@@ -150,19 +106,19 @@ router.get(
 
 router.post(
   '/api/documents',
-  validate({ body: writeBody }),
+  apiKeyAuth(['documents:write']),
+  validate({ body: createBody }),
   (req, res) => {
     const { path: docPath, content } =
-      req.body as z.infer<typeof writeBody>;
+      req.body as z.infer<typeof createBody>;
 
     try {
       const result = createDocument({
         path: docPath,
         content,
-        writer: determineWriterFromContext('HTTP'),
+        writer: 'USER',
       });
 
-      registerLogosWrite(docPath, computeContentHash(content));
       return res.status(201).json({ id: result.document.id, status: 'created', document: result.document });
     } catch (err: any) {
       if (err.conflict) {
@@ -178,6 +134,7 @@ router.post(
 
 router.put(
   '/api/documents/:id',
+  apiKeyAuth(['documents:write']),
   validate({ params: idParam, body: updateBody }),
   (req, res) => {
     const { content, expectedVersion, expectedHash } = req.body as z.infer<typeof updateBody>;
@@ -191,12 +148,11 @@ router.put(
       const result = updateDocument({
         id: req.params.id,
         content,
-        writer: determineWriterFromContext('HTTP'),
+        writer: 'USER',
         expectedVersion,
         expectedHash,
       });
 
-      registerLogosWrite(doc.path, computeContentHash(content));
       return res.json({ id: result.document.id, status: 'updated', document: result.document });
     } catch (err: any) {
       if (err.conflict) {
@@ -212,21 +168,15 @@ router.put(
 
 router.delete(
   '/api/documents/:id',
-  validate({ params: idParam }),
+  apiKeyAuth(['documents:write']),
+  validate({ params: idParam, query: deleteQuery }),
   async (req, res) => {
     const doc = getActiveDocument(req.params.id);
     if (!doc) {
       return res.status(404).json({ error: 'not_found' });
     }
 
-    // For DELETE, we need expectedVersion and expectedHash from query params
-    // Since the current schema doesn't include them in body, we'll require them as query params
-    const expectedVersion = parseInt(req.query.expectedVersion as string, 10);
-    const expectedHash = req.query.expectedHash as string;
-    
-    if (isNaN(expectedVersion) || !expectedHash) {
-      return res.status(400).json({ error: 'expectedVersion and expectedHash query parameters required' });
-    }
+    const { expectedVersion, expectedHash } = req.query as unknown as z.infer<typeof deleteQuery>;
 
     try {
       const result = deleteDocument({
@@ -250,6 +200,7 @@ router.delete(
 
 router.post(
   '/api/vault/reconcile',
+  apiKeyAuth(['vault:reconcile']),
   validate({ body: reconcileBody }),
   async (req, res, next) => {
     try {
@@ -274,7 +225,7 @@ router.post(
 );
 
 // Legacy sync endpoint — same handler
-router.post('/api/vault/sync', validate({ body: reconcileBody }), async (req, res, next) => {
+router.post('/api/vault/sync', apiKeyAuth(['vault:reconcile']), validate({ body: reconcileBody }), async (req, res, next) => {
   try {
     const { path: syncPath } = req.body as z.infer<typeof reconcileBody>;
     const result = await reconcile(syncPath);

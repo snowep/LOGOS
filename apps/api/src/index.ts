@@ -4,6 +4,7 @@ import { initializeSchema } from './db';
 import { startWatcher } from './services/watcher';
 import { installConsoleCapture } from './routes/system';
 import { config } from './config';
+import { resolveSafePath } from './fs/safePath';
 
 initializeSchema();
 installConsoleCapture();
@@ -20,3 +21,4 @@ server.listen(config.port, config.host, () => {
 });
 
 export default server;
+export { resolveSafePath };

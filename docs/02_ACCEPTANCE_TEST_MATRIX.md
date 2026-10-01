@@ -1,204 +1,106 @@
-# LOGOS — P0.4.1 Vault Sync Acceptance Test Matrix
+# LOGOS — P0.4.2 Vault Sync Integrity Acceptance Matrix
+
+A phase is not accepted until the actual implementation passes the relevant cases below.
 
 ## A. Document service
 
 ### A1 Create new Markdown
 
-Verify:
-
-- `.md` or `.markdown` only,
-- safe relative path,
-- file exists,
-- exact content matches,
-- final file hash matches returned hash,
-- DB row exists,
-- version = 1,
-- one `created` event exists.
+Verify `.md`/`.markdown`, safe relative path, byte limit, exact file content/hash, DB row, version 1, one created event.
 
 ### A2 Create existing path
 
-Precondition:
+Existing filesystem content must remain byte-for-byte unchanged. DB and event history must remain unchanged. Return an explicit conflict.
 
-```text
-projects/a.md exists with user content
-```
+### A3 Create contract
 
-Attempt create at the same path.
-
-Verify:
-
-- request is rejected,
-- original file content remains unchanged,
-- DB remains unchanged,
-- no new document identity is created.
-
-### A3 Update
-
-Write v2 using expected v1 version/hash.
-
-Verify:
-
-- file changes,
-- DB hash changes,
-- version increments exactly once,
-- one `modified` event.
+Create must not require update-only optimistic concurrency fields unless a deliberate protocol specifies why.
 
 ### A4 Same-content update
 
-Write identical content.
-
-Verify:
-
-- no version increment,
-- no modification event,
-- no duplicate SSE mutation event.
+No version increment and no modification event.
 
 ### A5 External file changed before update
 
-Client snapshot:
-
-```text
-v1 / hash A
-```
-
-Change live file externally to hash B.
-
-Update using snapshot A.
-
-Verify:
-
-```text
-409 Conflict
-```
-
-and:
-
-- no overwrite,
-- no DB mutation,
-- no event from failed operation.
+Expected state is stale. Verify `409`, no overwrite, no DB mutation, no event.
 
 ### A6 External file deleted before update
 
-Client snapshot says active file exists.
-
-Delete live file externally.
-
-Attempt update.
-
-Verify:
-
-```text
-409 Conflict
-```
-
-Do not recreate the file.
+Verify `409`. The update must not recreate the missing file.
 
 ### A7 Delete
 
-Delete using expected state.
+File disappears or enters controlled trash; row remains; `deleted_at` is set; exactly one deleted event; history remains queryable.
 
-Verify:
+### A8 DB failure after FS preparation
 
-- file is gone,
-- document row remains,
-- `deleted_at` is set,
-- one deleted event exists,
-- previous event history remains queryable.
+Force the DB transaction/event write to fail. Verify no misleading success and recoverable filesystem/DB state.
 
 ---
 
-## B. Watcher
+## B. Tombstone lifecycle
 
-### B1 External create
+### B1 External delete -> tombstone
 
-Create a Markdown file directly on disk.
+Tracked file deleted directly on disk. After the bounded window the row is tombstoned and absent from the active list.
 
-Verify:
+### B2 Tombstone history
 
-- document identity created,
-- created event recorded,
-- correct hash,
-- actor = USER.
+Historical events remain queryable after deletion.
 
-### B2 External modify
+### B3 Same-path recreate
 
-Modify an existing file.
+Delete a tracked file, allow tombstone, recreate the same path.
 
-Verify one version increment and one modified event.
+Verify the documented policy exactly. No file may remain present while its row is unintentionally tombstoned.
 
-### B3 Duplicate watcher notification
+### B4 Same-content recreate
 
-Force repeated change events with unchanged content.
+Same-path recreate with identical content must not be silently treated as a no-op against the old tombstone unless an explicit restore policy exists.
 
-Verify no version inflation.
+### B5 Different-content recreate
 
-### B4 External delete
-
-Delete a tracked file.
-
-Wait beyond rename window.
-
-Verify:
-
-- tombstone exists,
-- deleted event exists,
-- history remains,
-- document is no longer listed as active.
-
-### B5 Rename
-
-```text
-projects/a.md -> projects/b.md
-```
-
-Verify:
-
-- same document ID,
-- path updated,
-- previous_path recorded,
-- one rename event,
-- no deleted event.
-
-### B6 Move
-
-```text
-projects/a.md -> archive/a.md
-```
-
-Verify same identity and one moved event.
-
-### B7 Rename state cleanup
-
-After rename resolution, verify no stale pending state remains for old/new paths.
-
-### B8 Duplicate content files
-
-Create two independent files with identical content.
-
-Verify:
-
-- two document IDs,
-- neither is misclassified as rename.
-
-### B9 Delete then recreate same path
-
-Delete tracked file and allow tombstone.
-
-Create a new file at the same path.
-
-Verify behavior matches the documented restore/new-identity policy.
-
-Do not leave a file present with `deleted_at` still set unless the policy explicitly says so.
+Same-path recreate with different content must not mutate the tombstone in place unless explicit restore semantics say so.
 
 ---
 
-## C. Reconciliation
+## C. Watcher
 
-### C1 Full clean reconcile
+### C1 External create
 
-Run twice without changes.
+Correct identity, hash, version, actor `USER`, one created event.
 
-Second run must report:
+### C2 External modify
+
+Exactly one version increment and one modified event.
+
+### C3 Duplicate notifications
+
+Repeated watcher events with unchanged content produce no version inflation.
+
+### C4 Rename
+
+Same ID, updated path, previous path captured, one rename event, no deleted event.
+
+### C5 Move
+
+Same ID, updated path, previous path captured, one moved event.
+
+### C6 Rename state cleanup
+
+No stale old/new `pending_*` state after successful rename/move.
+
+### C7 Duplicate content files
+
+Two independent files with identical content remain two identities; hash equality alone is never enough to merge them.
+
+---
+
+## D. Reconciliation
+
+### D1 Full clean reconcile twice
+
+Second run is zero-delta:
 
 ```text
 created 0
@@ -208,256 +110,233 @@ renamed 0
 conflicts 0
 ```
 
-### C2 Scoped reconcile
+### D2 Scoped reconcile
 
-Have documents in:
+Changes inside subtree do not tombstone siblings outside it.
 
-```text
-projects/
-archive/
-```
+### D3 Missing file
 
-Reconcile only `projects/`.
+Complete scan + missing tracked file -> tombstone + deleted event.
 
-Verify archive state is untouched.
+### D4 Partial/read failure
 
-### C3 Missing file
+Injected scan failure returns PARTIAL/FAILED and does not tombstone files solely because they were unreadable.
 
-Remove tracked file externally, then reconcile.
+### D5 Oversized file
 
-Verify tombstone + deleted event.
+File over byte limit is skipped/rejected without unnecessary full payload loading.
 
-Verify document event history remains.
+### D6 Rename detection
 
-### C4 Read/stat error
+Unique active evidence preserves identity. Ambiguous evidence does not silently rename.
 
-Inject a controlled scan failure.
+### D7 Tombstone candidate
 
-Verify:
+Tombstoned document hash must not become an automatic rename candidate.
 
-- result reports partial/skipped state,
-- file is not marked deleted solely because it could not be read.
+### D8 Same-path tombstone recreate
 
-### C5 Oversized file
-
-Create a Markdown file larger than 10 MB.
-
-Verify it is rejected/skipped without loading the whole payload unnecessarily.
-
-### C6 Reconcile rename
-
-Move/rename a file outside the watcher event path and reconcile.
-
-Verify existing identity is preserved only when evidence is unique.
-
-### C7 Tombstone candidate
-
-Have a tombstoned document with a hash matching a new file.
-
-Verify the reconcile logic does not silently resurrect it as an active rename.
+Reconcile behavior matches the explicit restore/new-identity policy.
 
 ---
 
-## D. Writer identity
+## E. Writer identity
 
-### D1 HTTP user write
+### E1 HTTP create/update
 
-Use the public HTTP API.
+Actor = `USER`.
 
-Verify actor = USER.
+### E2 Internal LOGOS write
 
-### D2 Internal LOGOS write
+Actor = `LOGOS`.
 
-Invoke the internal service with actor = LOGOS.
+### E3 AGENT write
 
-Verify actor = LOGOS.
+Actor = `AGENT`.
 
-### D3 Agent write
+### E4 AUTOMATION write
 
-Invoke internal service with actor = AGENT.
+Actor = `AUTOMATION`.
 
-Verify actor = AGENT.
+### E5 Public spoof attempt
 
-### D4 Automation write
-
-Invoke internal service with actor = AUTOMATION.
-
-Verify actor = AUTOMATION.
-
-### D5 Public actor spoofing
-
-Send a JSON body attempting:
-
-```text
-writer = LOGOS
-```
-
-Verify the public API ignores/rejects that field and records USER.
+A request body attempting `writer=LOGOS` cannot change the recorded actor.
 
 ---
 
-## E. Concurrency
+## F. Concurrency
 
-### E1 Stale version
+### F1 Stale version
 
-Expected v7, current v8.
+`409`, zero mutation.
 
-Verify `409` and zero mutation.
+### F2 Wrong hash
 
-### E2 Wrong hash
+`409`, zero mutation.
 
-Expected version correct, expected hash wrong.
+### F3 Live-file race
 
-Verify `409` and zero mutation.
+Deterministic barrier changes the real file after validation but before mutation. Verify `409` and no silent overwrite/version increment.
 
-### E3 Live-file race
+### F4 Event transaction failure
 
-Use a deterministic test barrier to change the real file after validation but before mutation.
-
-Verify `409`, no silent overwrite, and no successful DB version increment.
-
-### E4 Database event transaction
-
-Force the event insert to fail after document state mutation is prepared.
-
-Verify the document row does not commit partially.
+Forced event failure does not create a partially committed document state.
 
 ---
 
-## F. SSE
+## G. SSE
 
-### F1 Connect
+### G1 Connect
 
-Open:
+`/events/vault` reaches connected state.
 
-```text
-/api/vault/events
-```
+### G2 File events
 
-Verify connection state becomes connected.
+Payload is metadata-only and uses the canonical vocabulary.
 
-### F2 File event
+### G3 Reconcile completion
 
-Create/modify a Markdown file.
+Producer and browser both use `reconcile-complete`.
 
-Verify payload contains metadata only:
+### G4 Re-render stability
 
-```text
-documentId
-path
-event
-version
-hash
-writer
-timestamp
-```
+Repeated React renders do not create repeated EventSource connections.
 
-### F3 Reconcile completion
+### G5 Reconnect stability
 
-Run reconciliation.
-
-Verify producer and browser use the same event name.
-
-### F4 Re-render stability
-
-Cause repeated React state updates.
-
-Verify the EventSource is not recreated on every render.
-
-### F5 Reconnect
-
-Break the connection.
-
-Verify the UI reconnects and eventually reaches a usable state.
+Connection loss reconnects without duplicated active connections.
 
 ---
 
-## G. Filesystem safety
+## H. Filesystem security
 
-Reject:
+Reject absolute paths, traversal, Windows drive paths, UNC paths, root-prefix sibling attacks, symlink escapes, and junction escapes.
 
-```text
-../secret.md
-..\\secret.md
-C:\\secret.md
-\\\\server\\share\\secret.md
-/etc/passwd
-```
-
-Reject:
-
-```text
-root-prefix sibling attack
-symlink escape
-junction escape
-```
-
-Do not create parent directories before containment is proven.
+Parent directories must not be created until containment is proven.
 
 ---
 
-## H. API boundary
+## I. API security/configuration
 
-### H1 Local bind
+### I1 Local bind
 
-Start with defaults.
+Default bind is `127.0.0.1`.
 
-Verify API binds to:
+### I2 CORS
+
+Only configured browser origins are permitted for mutation requests; no wildcard production default.
+
+### I3 Authentication policy
+
+Direct mutation access follows the documented local-auth model and is actually installed where required.
+
+### I4 Portable configuration
+
+No machine-specific vault path or hardcoded localhost target remains in shipped config examples/build configuration unless deliberately documented.
+
+---
+
+## J. UI truthfulness
+
+### J1 Shell
+
+Exactly one Shell is rendered.
+
+### J2 Vault
+
+Only active documents appear in the normal list. Real content is displayed.
+
+### J3 Vault actions
+
+Unavailable actions are absent or clearly disabled; dead prompt/confirm/log handlers are removed.
+
+### J4 Memory
+
+API failure produces error/retry, never fabricated memory records.
+
+### J5 System
+
+MUI-only and theme-token-based.
+
+### J6 Settings
+
+No no-op controls claim to change the system.
+
+### J7 Theme
+
+First launch is dark; actual toggle changes mode; stored preference is respected.
+
+---
+
+## K. Genie-inspired LOGOS UI
+
+### K1 Chat composition
+
+Desktop has an internal conversation rail plus dominant main conversation workspace.
+
+### K2 Real conversation lifecycle
+
+New chat and conversation selection operate on real persisted data or show truthful unavailable states.
+
+### K3 Context/result cards
+
+Cards correspond to real vault/task/council/memory records and real actions only.
+
+### K4 Responsive behavior
+
+Desktop, tablet, and mobile follow the design brief without horizontal scrolling.
+
+### K5 Normal-user simplicity
+
+Technical telemetry and raw model reasoning are not the primary conversational UI.
+
+---
+
+## L. Documentation and release
+
+### L1 Phase metadata
+
+Runtime and docs identify the intended P0.4.2 branch/phase state.
+
+### L2 Canonical product docs
+
+Permanent product direction documents remain available alongside audit documents.
+
+### L3 Reproducible verification
+
+Record the actual outputs/status for:
 
 ```text
-127.0.0.1
+npm ci
+npm run typecheck
+npm run lint
+npm run build
+npm test
 ```
 
-### H2 CORS
+### L4 CI
 
-Verify only configured web origins are allowed for browser mutation requests.
-
-### H3 Authentication
-
-Verify direct mutation access follows the documented local-auth model.
+Prefer a GitHub Actions workflow with a real run associated with the release candidate commit.
 
 ---
 
-## I. UI truthfulness
+# M. Expanded UI and responsive verification
 
-### I1 Shell
+The following documents are mandatory for UI-affecting changes:
 
-Verify exactly one Shell is rendered.
+```text
+06_UI_COMPONENT_TEST_MATRIX.md
+07_RESPONSIVE_SIZE_AUDIT.md
+```
 
-### I2 Vault
+Acceptance requires:
 
-Select a document.
+```text
+component behavior -> PASS
+accessibility -> PASS
+truthfulness -> PASS
+runtime/console errors -> PASS
+responsive viewport audit -> PASS
+```
 
-Verify real document content is displayed.
-
-### I3 Vault actions
-
-Verify unavailable actions are not presented as operational.
-
-### I4 Memory
-
-When API fails, verify no fabricated memory appears.
-
-### I5 System
-
-Verify MUI-only page with real runtime values.
-
-### I6 Settings
-
-Verify no no-op setting claims to have changed the system.
-
-### I7 Theme
-
-Verify first launch defaults to dark and visible toggle actually changes theme.
-
----
-
-## J. Lifecycle
-
-### J1 API restart
-
-Verify documents, versions, tombstones, and event history remain intact.
-
-### J2 Start from another working directory
-
-Verify `LOGOS_HOME/system/logos.db` and configured vault path resolve correctly.
+The responsive audit includes exact mandatory viewport sizes and orientation checks; desktop-only visual inspection is insufficient.

@@ -10,7 +10,7 @@ export interface SseClient {
 
 const sseClients = new Map<string, SseClient>();
 
-export function broadcastEvent(eventType: string, data: any): void {
+export function broadcastEvent(eventType: 'file-change' | 'reconcile-complete', data: any): void {
   const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
   sseClients.forEach((client, clientId) => {
     try {
@@ -29,11 +29,16 @@ const router = Router();
 
 // SSE endpoint for vault sync events
 router.get('/events/vault', (req: Request, res: Response) => {
+  // Use configured CORS origins instead of wildcard
+  const origin = req.headers.origin;
+  const allowedOrigins = config.cors.origin === '*' ? '*' : config.cors.origin;
+  const corsOrigin = typeof allowedOrigins === 'string' && allowedOrigins !== '*' ? allowedOrigins : (origin || '*');
+  
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': corsOrigin,
   });
 
   res.write(': welcome\n\n');

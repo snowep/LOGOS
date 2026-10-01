@@ -11,12 +11,37 @@ export interface VaultFile {
   hash: string;
 }
 
+// Canonical event vocabulary (P0.4.2)
+export type WriterIdentity = 'USER' | 'LOGOS' | 'AGENT' | 'AUTOMATION';
+
+export type VaultEventType = 
+  | 'file-change'
+  | 'reconcile-complete';
+
+export type FileChangeEvent = 'created' | 'modified' | 'deleted' | 'renamed' | 'moved';
+
 export interface VaultEvent {
-  event: 'add' | 'change' | 'unlink' | 'unlinkDir';
+  event: FileChangeEvent;
+  documentId: string;
   path: string;
+  version: number;
+  hash: string;
+  writer: WriterIdentity;
   timestamp: string;
-  conflict?: boolean;
-  content?: string;
+  previousPath?: string;
+}
+
+export interface ReconcileCompleteEvent {
+  event: 'reconcile-complete';
+  path: string;
+  created: number;
+  updated: number;
+  deleted: number;
+  renamed: number;
+  conflicts: number;
+  skipped: number;
+  scanQuality: 'COMPLETE' | 'PARTIAL' | 'FAILED';
+  timestamp: string;
 }
 
 export interface SyncState {

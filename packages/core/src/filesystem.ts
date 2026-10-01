@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { resolveSafePath } from '@logos/api/fs/safePath';
 
 export interface StorageAdapter {
   read(relativePath: string): Promise<string>;
@@ -19,25 +20,13 @@ export class SafeFilesystemAdapter implements StorageAdapter {
     }
   }
 
-  private resolveSafePath(relativePath: string): string {
-    const normalized = path.normalize(relativePath);
-    if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
-      throw new Error(`Path traversal attempt blocked: ${relativePath}`);
-    }
-    const resolved = path.resolve(this.rootPath, normalized);
-    if (!resolved.startsWith(this.rootPath)) {
-      throw new Error(`Path outside root blocked: ${relativePath}`);
-    }
-    return resolved;
-  }
-
   async read(relativePath: string): Promise<string> {
-    const safePath = this.resolveSafePath(relativePath);
+    const safePath = resolveSafePath(this.rootPath, relativePath);
     return fs.promises.readFile(safePath, 'utf8');
   }
 
   async write(relativePath: string, content: string): Promise<void> {
-    const safePath = this.resolveSafePath(relativePath);
+    const safePath = resolveSafePath(this.rootPath, relativePath);
     const dir = path.dirname(safePath);
     if (!fs.existsSync(dir)) {
       await fs.promises.mkdir(dir, { recursive: true });
@@ -49,19 +38,19 @@ export class SafeFilesystemAdapter implements StorageAdapter {
   }
 
   async exists(relativePath: string): Promise<boolean> {
-    const safePath = this.resolveSafePath(relativePath);
+    const safePath = resolveSafePath(this.rootPath, relativePath);
     return fs.existsSync(safePath);
   }
 
   async delete(relativePath: string): Promise<void> {
-    const safePath = this.resolveSafePath(relativePath);
+    const safePath = resolveSafePath(this.rootPath, relativePath);
     if (fs.existsSync(safePath)) {
       await fs.promises.unlink(safePath);
     }
   }
 
   async list(dirPath = ''): Promise<string[]> {
-    const safeDir = this.resolveSafePath(dirPath);
+    const safeDir = resolveSafePath(this.rootPath, dirPath);
     if (!fs.existsSync(safeDir)) return [];
     return fs.promises.readdir(safeDir);
   }

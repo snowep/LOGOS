@@ -21,10 +21,10 @@ const darkPalette: ThemeOptions['palette'] = {
     contrastText: accent.contrastText,
   },
   secondary: {
-    main: '#A855F7',
-    light: '#C084FC',
-    dark: '#9333EA',
-    contrastText: '#FFFFFF',
+    main: '#6FBF8A',
+    light: '#8FD3A6',
+    dark: '#58A670',
+    contrastText: '#0F0E0D',
   },
   background: {
     default: '#0F0E0D',
@@ -79,9 +79,9 @@ const lightPalette: ThemeOptions['palette'] = {
     contrastText: accent.contrastText,
   },
   secondary: {
-    main: '#9333EA',
-    light: '#A855F7',
-    dark: '#7E22CE',
+    main: '#3F7D55',
+    light: '#5AA372',
+    dark: '#316344',
     contrastText: '#FFFFFF',
   },
   background: {

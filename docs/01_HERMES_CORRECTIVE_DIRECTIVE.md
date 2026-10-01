@@ -1,534 +1,400 @@
-# LOGOS — Hermes Agent Corrective Directive
-# P0.4.1 Vault Sync Hardening — Final Integrity Pass
+# LOGOS — Hermes Corrective Directive for P0.4.2
 
 ## Mission
 
-Take the current branch:
+Make `p0.4.2-vault-sync-integrity` a trustworthy vault synchronization foundation. Do not start P0.5 until this gate is closed.
+
+## Branch baseline
 
 ```text
-p0.4.1-vault-sync-hardening
+HEAD  373a4e14baae05a8c274a313176da297cdd84c23
+PARENT 2763109c530d9c4e53047e78c03c71151451ef08
 ```
 
-and finish the vault synchronization layer so that the filesystem, SQLite state, event history, actor identity, and browser synchronization semantics agree.
+## Rule 0 — Do not trust commit-message claims
 
-Do not start P0.5 Context Engine work.
-
-Do not invent P1.0 projects, P0.8 agents, or P0.9 councils.
-
-Do not preserve broken code merely because it already exists.
+The current commit says all gates pass. GitHub shows no status checks and no workflow runs for this head. Hermes must verify commands directly and record their outputs or clearly report that they were not run.
 
 ---
 
-# 1. Core invariants
+## 1. Fix tombstone lifecycle first
 
-These rules are non-negotiable:
+Create explicit helpers:
 
-1. Markdown files are real files on disk.
-2. SQLite is canonical runtime state for document identity/history, not a substitute for the file itself.
-3. A successful document write must change the real file and verify its final hash.
-4. A stale expected version/hash returns `409` and causes no mutation.
-5. A missing live file for an active document is a conflict for update operations.
-6. A create operation never overwrites an existing file.
-7. A confirmed deletion creates a tombstone; it never destroys document history.
-8. Rename/move preserves the original document ID only when evidence is unambiguous.
-9. Duplicate-content files remain distinct unless identity evidence proves they are the same document.
-10. Repeated path+hash watcher notifications are no-ops.
-11. Writer identity comes from server-side actor context.
-12. SSE producer and consumer event names must match exactly.
-13. Browser UI never claims an action is implemented when it is not.
-14. No production UI uses fabricated data.
+```text
+getActiveDocumentByPath(path)
+getDocumentIncludingTombstone(id)
+```
+
+Define and implement one policy for:
+
+```text
+delete -> tombstone -> same-path recreate
+```
+
+Recommended default:
+
+```text
+recreate same path -> new identity
+```
+
+Do not silently mutate tombstoned rows.
+
+Required tests:
+
+```text
+B4 B9 C7
+```
 
 ---
 
-# 2. Refactor document service into the authoritative mutation path
+## 2. Make document identity primitive idempotent
 
-File:
-
-```text
-apps/api/src/services/documentService.ts
-```
-
-The document service must own create/update/delete semantics.
-
-## 2.1 Create
-
-Required order:
+`getOrCreateDocumentIdentity()` must obey:
 
 ```text
-validate relative path
- -> validate supported extension
- -> validate ignore policy
- -> validate UTF-8 byte size <= max
- -> check active document by path
- -> check filesystem path
- -> reject existing path/file without mutation
- -> atomic file write
- -> re-read/hash final file
- -> create or explicitly restore identity
- -> transactionally insert document + created event
- -> broadcast event
- -> return verified state
+same path + same hash -> no version change, no event
 ```
 
-Separate create input from update input. Do not require fake expected version/hash values for a true create.
+It must also have explicit behavior for tombstoned records.
 
-If a tombstoned identity exists at the same path, choose one explicit policy:
-
-```text
-restore same identity
-```
-
-or
-
-```text
-reject and require explicit restore
-```
-
-Do not silently create a second identity.
-
-## 2.2 Update
-
-Input:
-
-```text
-id
-content
-expectedVersion
-expectedHash
-actor
-```
-
-Required order:
-
-```text
-load active document
- -> verify DB expectedVersion
- -> verify DB expectedHash
- -> resolve safe path
- -> require file exists
- -> hash current file
- -> compare current file hash to expectedHash
- -> if mismatch: 409, no mutation
- -> atomic write
- -> re-read/hash final file
- -> DB transaction: version + event
- -> broadcast
- -> return verified state
-```
-
-Do not accept a missing file as an implicit opportunity to recreate it.
-
-Version increments exactly once for a real hash change.
-
-Same hash is a no-op.
-
-## 2.3 Delete
-
-Input:
-
-```text
-id
-expectedVersion
-expectedHash
-actor
-```
-
-Required order:
-
-```text
-load active document
- -> verify DB expectedVersion/hash
- -> require current file and current hash to match expected state
- -> perform reversible/atomic delete strategy
- -> verify file is absent
- -> DB transaction: deleted_at + deleted event
- -> broadcast
- -> finalize filesystem removal if using trash staging
-```
-
-Do not hard-delete the document row.
+Do not make callers responsible for preventing version inflation.
 
 ---
 
-# 3. Transaction and recovery boundary
+## 3. Establish a cross-resource recovery boundary
 
-Use SQLite transactions for:
+For create/update/delete:
 
 ```text
-document row update
-+
-document event insert
+validate
+precondition check
+atomic/reversible FS action
+verify FS result
+SQLite transaction for row + event
+finalize
 ```
 
-Do not allow a success response when the file and DB disagree.
+Do not return success when DB/event commit fails after filesystem mutation.
 
-When a filesystem action succeeds but the database transaction fails, attempt an explicit recovery action and surface failure.
+For delete, use trash/staging where practical.
 
-For delete, a staging/trash approach is preferred over immediate irreversible unlink.
+Add deterministic failure-injection tests for DB failure after filesystem preparation.
 
 ---
 
-# 4. Centralize document eligibility
+## 4. Correct actor identity
 
-Create or extend one authoritative validator for:
+Remove `registerLogosWrite()` from public HTTP user routes.
 
-```text
-.md
-.markdown
-10 MB maximum by bytes
-ignored temp files
-ignored backups
-ignored logs
-ignored databases
-ignored node_modules
-safe relative path
-```
+Create a server-side actor/operation context under `services/`.
 
-The document service, watcher, and reconciliation must use the same rules.
-
-A public API request must not be able to create `foo.txt` or an oversized UTF-8 file merely because a watcher would ignore it later.
-
----
-
-# 5. Fix watcher state semantics
-
-File:
+Only actual internal actors can register self-write suppression:
 
 ```text
-apps/api/src/services/watcher.ts
-```
-
-## Add/change
-
-```text
-stat
- -> size check
- -> read
- -> hash
- -> actor resolution
- -> compare current state
- -> no-op if same hash
- -> mutate document state once
- -> record one event
- -> publish one event
-```
-
-## Unlink
-
-```text
-store pendingDelete
- -> do not emit delete yet
- -> wait bounded window
- -> matching add?
-      yes -> rename/move and clear both states
-      no  -> tombstone + deleted event + clear state
-```
-
-## Rename/move
-
-Requirements:
-
-- same directory => `renamed`
-- different directory => `moved`
-- same document ID preserved
-- `previous_path` stored
-- no transient `deleted` event
-- no stale path state left behind
-
-Do not match a tombstoned candidate as an active rename identity.
-
-## Actor recognition
-
-Remove the incorrect unconditional `registerLogosWrite()` behavior from HTTP routes.
-
-Use an internal operation record/token such as:
-
-```text
-operationId
-documentId
-oldPath
-newPath
-expectedHash
-actor
-createdAt
-```
-
-Only internal LOGOS/AGENT/AUTOMATION operations should be registered as such.
-
-A public HTTP request is `USER`.
-
----
-
-# 6. Fix reconciliation
-
-File:
-
-```text
-apps/api/src/services/reconcile.ts
-```
-
-## Full reconcile
-
-Operate across the entire vault.
-
-## Scoped reconcile
-
-If `syncPath` is provided:
-
-```text
-only compare paths inside that subtree
-```
-
-Never mutate siblings outside the subtree.
-
-## Deletion
-
-Never use:
-
-```sql
-DELETE FROM documents
-```
-
-for normal vault reconciliation.
-
-Use tombstones.
-
-## Rename/move
-
-Candidates must be active, uniquely identifiable, and not contradicted by another live path.
-
-Identical-content duplicates remain independent documents.
-
-## Errors
-
-Read/stat/permission errors:
-
-```text
-skipped / partial / failed
-```
-
-Never:
-
-```text
-read error -> delete document
-```
-
-The reconcile result must distinguish a trustworthy clean scan from a partial scan.
-
----
-
-# 7. Fix internal service API placement
-
-Do not define document-service APIs in:
-
-```text
-apps/api/src/routes/documents.ts
-```
-
-Routes translate HTTP requests into service calls.
-
-Internal calls belong under `services/`.
-
-Create a canonical actor context type there:
-
-```text
-USER
 LOGOS
 AGENT
 AUTOMATION
 ```
 
-The internal update helper must use a real document ID or a real path-resolution function. Never pass `id: ''` as an implicit lookup mechanism.
+HTTP user writes must remain `USER`.
 
----
-
-# 8. Fix request validation
-
-Use shared Zod schemas for:
+Implement and test:
 
 ```text
-document UUID
-create input
-update input
-delete input
-reconcile input
+D1 D2 D3 D4 D5
 ```
 
-Delete expected state must be validated through middleware, not `parseInt()` and raw strings in the route handler.
+---
+
+## 5. Move internal document APIs out of routes
+
+Delete the broken `writeDocumentInternal()` implementation from `routes/documents.ts`.
+
+Place canonical internal APIs in `documentService.ts` or a dedicated service module.
+
+Never use:
+
+```text
+id: ''
+```
+
+as an implicit path lookup.
 
 ---
 
-# 9. Fix SSE contract
+## 6. Make active document listing actually active
 
-Choose one canonical reconciliation event name:
+Normal document list endpoints must exclude tombstones:
+
+```sql
+WHERE deleted_at IS NULL
+```
+
+Provide explicit history access separately.
+
+Test that the Vault UI does not show deleted documents in the normal list.
+
+---
+
+## 7. Split request schemas
+
+Use distinct Zod contracts for:
 
 ```text
+create
+update
+delete
+reconcile
+```
+
+Use a UUID schema for document IDs.
+
+Validate delete expected version/hash entirely through middleware.
+
+Do not use character count as the 10 MB content limit; validate UTF-8 bytes in the service.
+
+---
+
+## 8. Make watcher deletion and rename state transactional and deterministic
+
+A confirmed deletion must:
+
+```text
+active document -> tombstoned
+                  + deleted event
+                  + broadcast
+```
+
+A rename/move must end with:
+
+```text
+old path = no pending state
+new path = no stale pending state
+same document ID
+one rename/move event
+no deleted event
+```
+
+Use explicit state transitions rather than duplicate ad-hoc SQL.
+
+---
+
+## 9. Reconcile only from complete scans
+
+Add an explicit scan quality result:
+
+```text
+COMPLETE
+PARTIAL
+FAILED
+```
+
+Only COMPLETE scans may tombstone missing documents.
+
+Read/stat errors must never be interpreted as absence.
+
+Rename candidates must be active and uniquely supported by evidence.
+
+Tombstoned matches are not automatic resurrection.
+
+---
+
+## 10. Unify SSE contract
+
+Canonical event names:
+
+```text
+created
+modified
+deleted
+renamed
+moved
 reconcile-complete
 ```
 
-Use the same string in:
+Update:
 
 ```text
-backend broadcast
-shared contract
-browser EventSource listener
-UI handler
+packages/contracts/src/index.ts
+apps/api/src/routes/events.ts
+apps/api/src/services/reconcile.ts
+apps/api/src/services/watcher.ts
+apps/web/src/hooks/useVaultEvents.ts
+Vault UI event handlers
 ```
 
-Browser flow:
-
-```text
-SSE event
- -> invalidate/refetch relevant data
- -> render current API state
-```
-
-The EventSource connection must not reconnect merely because normal React component state changes.
-
-Use stable callbacks or refs.
-
-Keep payloads metadata-only.
+Use metadata-only payloads.
 
 ---
 
-# 10. API security boundary
+## 11. Stabilize EventSource lifecycle
 
-File:
+Use callback refs or stable callbacks.
 
-```text
-apps/api/src/server.ts
-```
+The effect must not depend on inline callback identity from a rendering page.
 
-Default remains:
+`connect()` must avoid creating a second EventSource when one is already open/connecting.
+
+Add an integration/React test or deterministic instrumentation test for render stability.
+
+---
+
+## 12. Close the local API security boundary
+
+Keep:
 
 ```text
 HOST=127.0.0.1
 ```
 
-Do not leave:
+Replace wildcard CORS with configured local origins.
 
-```text
-CORS origin = *
-```
+Decide whether direct API access requires API keys in the current phase. If it does, install `apiKeyAuth()` on mutation routes. If local-only unauthenticated mode remains the phase policy, document that explicitly and keep network exposure unsupported.
 
-as the production default.
-
-Use a configured origin or another explicit local security boundary.
-
-Do not claim the API is safe for network exposure unless mutation routes are authenticated.
-
-The existing API-key middleware must either be integrated for direct API access or explicitly documented as future-only while the server is local-only.
+Do not leave the SSE route with a hardcoded `Access-Control-Allow-Origin: *`.
 
 ---
 
-# 11. Fix the shared filesystem implementation
+## 13. Unify filesystem security
 
-There must be one canonical safe path implementation.
+Use one canonical safe-path implementation.
 
-Do not keep both:
+Delete or refactor the weaker duplicate in `packages/core/src/filesystem.ts`.
 
-```text
-apps/api/src/fs/safePath.ts
-packages/core/src/filesystem.ts
-```
-
-with materially different security properties.
-
-Use:
+Tests must include:
 
 ```text
-normalize
- -> reject absolute paths
- -> reject traversal
- -> resolve against root
- -> path.relative containment check
- -> realpath/junction protection
- -> only then create parent directories
+../secret.md
+..\\secret.md
+C:\\secret.md
+\\\\server\\share\\secret.md
+/etc/passwd
+root-prefix sibling attack
+symlink escape
+junction escape
 ```
-
-Add tests for POSIX, Windows, UNC, traversal, junction/symlink escape, and the root sibling-prefix edge case.
 
 ---
 
-# 12. Fix document identity helpers
+## 14. Remove stale configuration and phase metadata
 
-`getOrCreateDocumentIdentity()` must be idempotent.
-
-Rule:
+`.env.example` must be portable. Prefer:
 
 ```text
-same path + same hash
- -> same document
- -> same version
- -> no new event
+LOGOS_HOME=~/.logos
+LOGOS_WORKSPACE_ROOT=
+LOGOS_API_URL=http://127.0.0.1:3001
+PORT=3001
+HOST=127.0.0.1
 ```
 
-A helper named `getOrCreate...` must not manufacture a new semantic modification every time it is called.
+Remove hardcoded `localhost:3001` from `apps/web/next.config.js` where possible; use a server-side/configurable target.
+
+Update phase metadata to reflect the actual branch intentionally.
 
 ---
 
-# 13. Add real integration tests
+## 15. Fix UI truthfulness and the Genie-inspired design direction
 
-Do not rely on the old `writeDocument()` tests.
-
-Test the actual new path:
+Follow both:
 
 ```text
-createDocument
-updateDocument
-deleteDocument
-watcher
-reconcile
+docs/03_UI_CORRECTIVE_DIRECTIVE.md
+docs/04_GENIE_INSPIRED_LOGOS_UI_BRIEF.md
 ```
 
-Use temporary directories and temporary SQLite databases.
-
-For the live-file race test, introduce a deterministic barrier/hook in test mode rather than depending on timing luck.
-
----
-
-# 14. Required exact integration cases
-
-Implement tests for all items in:
+Required Chat direction:
 
 ```text
-02_ACCEPTANCE_TEST_MATRIX.md
+Global LOGOS navigation
+        |
+        +-- Chat internal conversation rail
+        |
+        +-- Main conversation workspace
 ```
 
-A phase is not complete until all cases pass.
+The rail should use real persisted conversations. Do not hardcode fake conversations.
+
+Context/result cards must represent real records/actions only.
+
+Do not expose raw model reasoning in the normal user interface.
+
+Voice and vision remain out of scope.
 
 ---
 
-# 15. UI corrections
+## 16. Fix remaining UI violations
 
-Follow:
+### Memory
+
+Delete fabricated fallback data.
+
+### System
+
+Use MUI only and theme tokens.
+
+### Settings
+
+Remove no-op controls or mark them unavailable.
+
+### Theme
 
 ```text
-03_UI_CORRECTIVE_DIRECTIVE.md
+no stored preference -> dark
+stored preference -> stored mode
 ```
 
-Do not add future roadmap functionality merely to make screens look populated.
+Connect the actual toggle to `useThemeMode()`.
+
+### Vault
+
+Delete obsolete `console.log`, `prompt`, and `confirm` handlers instead of leaving dead code.
 
 ---
 
-# 16. Repository cleanup
+## 17. Normalize the web toolchain
 
-Before declaring completion:
+Deliberately align:
 
-- update phase metadata to P0.4.1,
-- remove machine-specific environment examples,
-- align shared event contracts,
-- remove duplicate filesystem security code,
-- normalize web dependency versions,
-- restore/retain canonical project direction documents,
-- remove stale ORION/JARVIS product references where appropriate,
-- do not use fake production fallback data.
+```text
+React
+React DOM
+Next
+@types/react
+@types/react-dom
+eslint-config-next
+TypeScript
+```
+
+Remove unnecessary duplicate animation libraries if not actually required by implemented UI.
+
+Raise web TypeScript strictness when feasible without weakening the API/core standards.
 
 ---
 
-# 17. Verification
+## 18. Restore canonical product documentation
 
-Run these in the actual branch:
+Keep phase audit docs separate from permanent project direction docs.
+
+Ensure the repository has a discoverable canonical set for:
+
+```text
+PRD
+ARCHITECTURE
+DESIGN/UI
+SECURITY
+AGENTS
+ROADMAP
+```
+
+Do not replace permanent product docs with a phase audit.
+
+---
+
+## 19. Required verification
+
+Run:
 
 ```text
 npm ci
@@ -538,15 +404,20 @@ npm run build
 npm test
 ```
 
-Also run the complete manual matrix.
+Then execute the full acceptance matrix.
 
-Do not write "all gates pass" unless the commands were actually executed in this branch.
+The final report must distinguish:
 
----
+```text
+executed + passed
+executed + failed
+not executed
+blocked
+```
 
-# Hermes completion format
+Never substitute the commit message for test evidence.
 
-Return exactly:
+## Hermes final report
 
 ```text
 STATUS: COMPLETE | BLOCKED | FAILED
@@ -559,4 +430,4 @@ RISKS:
 NEXT ACTION:
 ```
 
-If any Severity 1 item remains, return `BLOCKED`.
+If any Severity 1 issue remains, report `BLOCKED`.
