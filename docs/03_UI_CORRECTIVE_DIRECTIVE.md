@@ -1,10 +1,12 @@
 # LOGOS — UI Corrective Directive for P0.4.1
 
-## Rule
+## Product rule
 
-The UI must show what actually exists today, not what the roadmap intends to exist later.
+The interface must describe the system that actually exists today.
 
-P0.4 is a vault synchronization phase. It is not yet the project/agent/council phase.
+P0.4.1 is still primarily a vault synchronization phase.
+
+Do not fabricate projects, memory, metrics, integrations, statuses, or future capabilities.
 
 ---
 
@@ -16,62 +18,21 @@ File:
 apps/web/app/components/Shell.tsx
 ```
 
-Correct:
+Rules:
 
-- one Shell from `app/layout.tsx`,
-- no page-specific Shell wrappers,
-- collapsed width 64 px,
-- expanded width 248 px,
-- top bar 56 px,
-- correct content positioning when drawer expands,
-- one semantic `<main>` element,
-- functional theme toggle using `useThemeMode()`,
-- icon-only controls have `aria-label`.
+- root `app/layout.tsx` owns the only Shell,
+- pages render content only,
+- desktop rail = 64 px collapsed / 248 px expanded,
+- top bar = 56 px,
+- content max width = 1120 px,
+- one semantic main region,
+- theme toggle must call `useThemeMode()`.
 
-Do not render a meaningless chevron as the theme button.
+Remove the extra Shell wrapper from `apps/web/app/vault/page.tsx`.
 
 ---
 
-## 2. Home
-
-Files:
-
-```text
-apps/web/app/page.tsx
-apps/web/app/components/HomeClient.tsx
-```
-
-Do not map every document to a fake Project entity.
-
-Until P1.0 real project entities exist, use:
-
-```text
-Greeting
-Command input
-Recent document activity
-Needs Attention only when real conflicts exist
-```
-
-The command box remains:
-
-```text
-max width 760 px
-min height 104 px
-```
-
-No voice control.
-
-No fake progress.
-
-No fake project status.
-
-No hardcoded "Continue editing" as a false next action.
-
-Do not navigate to `/work/{id}` until `/work/[id]` actually exists.
-
----
-
-## 3. Vault
+## 2. Vault
 
 File:
 
@@ -79,29 +40,51 @@ File:
 apps/web/app/vault/page.tsx
 ```
 
-Use the three-pane pattern:
+Keep:
 
 ```text
-left    200 px
-middle  320 px
-right   remaining
+left 200 px
+middle 320 px
+right remaining
 ```
 
-The right preview must fetch the actual document.
+The page should show:
 
-Do not show placeholder content such as:
+- real Markdown files,
+- real document metadata,
+- real content preview,
+- real sync connection state.
+
+The page must not claim these are operational when they are not:
 
 ```text
-This is a preview of the document content...
+Edit
+Rename
+Move
+Archive
+Show related
+Find conflicts
 ```
 
-Do not ship handlers that only call `console.log()` while presenting them as usable actions.
+Remove them or render disabled/unavailable states.
 
-Use MUI only for visible UI.
+Do not use `prompt()` or `confirm()` as unfinished product interactions.
 
-Render Markdown through a controlled/sanitized path before using `dangerouslySetInnerHTML`.
+Use centralized theme tokens. Do not hardcode the old indigo/gray UI system.
 
-Hide raw machine paths by default.
+---
+
+## 3. Vault preview
+
+Real content must be fetched from:
+
+```text
+/api/documents/{id}
+```
+
+Markdown should be sanitized before `dangerouslySetInnerHTML`.
+
+Do not expose full machine paths unless explicitly requested.
 
 ---
 
@@ -113,13 +96,16 @@ File:
 apps/web/app/memory/page.tsx
 ```
 
-Do not fall back to fabricated memory records when API access fails.
+When the API fails:
 
-Show a real empty/error state instead.
+```text
+Error loading memories
+Retry
+```
 
-Do not show user-specific memory as seed/demo data in production UI.
+Do not insert seed/demo records.
 
-Search and provenance remain real.
+Until real memory query contracts are complete, an honest empty state is preferable to fabricated populated data.
 
 ---
 
@@ -131,23 +117,31 @@ File:
 apps/web/app/system/page.tsx
 ```
 
-Replace every raw HTML container with MUI components.
+Rebuild with MUI only.
 
-Keep the System page technical, but truthful.
-
-The retrieval section must distinguish:
+Use:
 
 ```text
-sqlite-vec available
+Container / Box / Stack / Grid / Paper / Typography / Alert / List / Table / Chip
+```
+
+or other official MUI components as appropriate.
+
+No raw page-level `div`, `section`, `h1`, `h2`, `pre` styling system.
+
+All semantic colors come from the theme.
+
+The System page should accurately distinguish:
+
+```text
+JavaScript fallback retrieval
 ```
 
 from:
 
 ```text
-JavaScript fallback active
+sqlite-vec active
 ```
-
-The current implementation uses JavaScript similarity scanning, so do not imply sqlite-vec is active unless it actually is.
 
 ---
 
@@ -159,13 +153,30 @@ File:
 apps/web/app/settings/page.tsx
 ```
 
-No no-op switches that appear to change system state.
+Do not present:
 
-No machine-specific vault path.
+```text
+checked={true}
+onChange={() => {}}
+```
 
-Appearance must connect to the shared ThemeRegistry.
+as a real setting.
 
-Future settings may be shown as unavailable, but must not pretend to be operational.
+Use one of:
+
+```text
+real backed setting
+```
+
+or:
+
+```text
+disabled + unavailable note
+```
+
+Remove machine-specific paths.
+
+Appearance controls must use the shared ThemeRegistry.
 
 ---
 
@@ -179,47 +190,48 @@ apps/web/src/theme/theme.ts
 apps/web/src/theme/ThemeRegistry.tsx
 ```
 
-Dark mode is the default.
+Required behavior:
 
-Light mode is fully styled.
+```text
+no stored preference -> dark
+stored preference -> use it
+```
 
-Use the temporary warm accent only.
+Do not silently select light mode from OS preference before the user explicitly changes the product setting.
 
-Remove unused purple/indigo secondary identity.
+Remove unused purple/indigo secondary branding.
 
-Centralize semantic colors in theme tokens.
-
-Do not use hardcoded product colors in page components.
+Keep the temporary warm accent only until the final LOGOS brand palette is defined.
 
 ---
 
-## 8. Typography and spacing
+## 8. Contract alignment
 
-Keep:
+The browser and backend must share the same event vocabulary:
 
 ```text
-Home title: 32 px
-inner page title: <=28 px
-section heading: 18 px
-card title: 16 px
-body: 14–16 px
-metadata: 12–13 px
+created
+modified
+deleted
+renamed
+moved
+reconcile-complete
 ```
 
-Use:
+Do not maintain a parallel stale contract such as:
 
 ```text
-content max width: 1120 px
-page padding: 32 px desktop / 16 px mobile
-section gap: 32 px
-card gap: 16 px
+add
+change
+unlink
+unlinkDir
 ```
 
 ---
 
 ## 9. Truthfulness scan
 
-Before completion search source for:
+Before completion search for:
 
 ```text
 mock
@@ -237,4 +249,29 @@ System Operational
 Continue editing
 ```
 
-Every occurrence must be removed or explicitly documented as development-only.
+Every remaining occurrence must be removed or explicitly documented as development-only.
+
+---
+
+## 10. Accessibility
+
+Verify:
+
+- keyboard navigation,
+- visible focus,
+- icon-only controls have `aria-label`,
+- correct heading hierarchy,
+- form labels,
+- no information conveyed only by color,
+- sufficient contrast,
+- no horizontal scrolling at required viewport sizes.
+
+Required sizes:
+
+```text
+1440 x 900
+1280 x 800
+1024 x 768
+768 x 1024
+390 x 844
+```

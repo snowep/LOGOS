@@ -1,655 +1,850 @@
-# LOGOS — Current Branch Audit: P0.4 Vault Sync
+# LOGOS — Current Branch Audit: P0.4.1 Vault Sync Hardening
 
 ## Audited branch
 
 ```text
-p0.4-vault-sync
-commit e0ae32a2981f57ddf59da25e9f6975226be57cb3
+p0.4.1-vault-sync-hardening
+commit 2763109c530d9c4e53047e78c03c71151451ef08
+parent    e0ae32a2981f57ddf59da25e9f6975226be57cb3
 ```
-
-The commit message claims all gates pass, but GitHub reports no CI status checks and no workflow runs for this commit. Treat the commit message as an implementation claim, not independent verification.
 
 ## Executive result
 
 ```text
-P0.3.1 foundation direction      IMPROVED
-P0.4 document identity           PARTIALLY CORRECT
-P0.4 watcher                     NOT RELIABLE ENOUGH
-P0.4 reconciliation              NOT SAFE ENOUGH
-P0.4 LOGOS filesystem writes     NOT IMPLEMENTED
-P0.4 conflict handling           PARTIALLY CORRECT
-P0.4 SSE                         BACKEND EXISTS / CLIENT NOT WIRED
-P0.4 security boundary           NOT SAFE FOR NETWORK EXPOSURE
-UI product alignment             PARTIALLY ALIGNED
-P0.4 release gate                FAIL
+P0.3.1 foundation             IMPROVED / MOSTLY STABLE
+Document service              IMPROVED / IMPORTANT EDGE CASES REMAIN
+Document tombstones           PARTIALLY IMPLEMENTED
+Watcher                       NOT SAFE ENOUGH
+Reconciliation                NOT SAFE ENOUGH
+Concurrency                   PARTIAL
+Writer identity               PARTIAL / INCORRECT IN CURRENT ROUTING
+SSE                           PARTIAL / CONTRACT MISMATCH
+Filesystem safety             GOOD IN API PATH CHECK, DUPLICATED IN CORE
+Vault UI                      IMPROVED / STILL NOT PRODUCTION-COMPLETE
+System UI                     NOT ALIGNED
+Memory UI                     NOT TRUTHFUL
+Settings UI                   NOT TRUTHFUL
+Toolchain                     INCONSISTENT
+CI                            NOT VERIFIED
+P0.4.1 release gate           FAIL
+P0.5 Context Engine           DO NOT START
 ```
 
-## Severity 1 — LOGOS writes do not write files
+## What this branch fixed correctly
 
-### Evidence
+The hardening commit introduced several good changes:
 
-`apps/api/src/routes/documents.ts`
+- a dedicated `documentService.ts`,
+- real filesystem writes for create/update/delete operations,
+- atomic temp-file replacement for writes,
+- post-write hash verification,
+- `deleted_at` tombstone field,
+- removal of `ON DELETE CASCADE` from document events,
+- shared watcher/reconcile eligibility rules,
+- bounded pending-delete handling,
+- unique-hash requirement for reconciliation rename detection,
+- scoped deletion comparison for reconciliation,
+- server-side writer selection in HTTP routes,
+- localhost binding through `HOST=127.0.0.1`,
+- browser SSE consumer hook,
+- real document content fetching,
+- sanitized Markdown rendering dependency.
 
-The POST and PUT handlers call:
-
-```ts
-writeDocument({ ... })
-registerLogosWrite(...)
-```
-
-`apps/api/src/db/index.ts`
-
-`writeDocument()` updates the `documents` table, but contains no filesystem write.
-
-### Consequence
-
-The database can claim a new hash/version while the real Markdown file is unchanged or missing.
-
-That breaks the required flow:
-
-```text
-Intent
- -> Read current document
- -> Check expected version/hash
- -> Authorize
- -> Atomic write
- -> Register actor
- -> Watcher observes
- -> Recognize actor
- -> Update state
- -> Verify final hash
-```
-
-### Required correction
-
-Move filesystem mutation into the document service/write path.
-
-Required order:
-
-```text
-validate path
- -> load current state
- -> check expected version/hash
- -> register operation actor
- -> atomic filesystem write
- -> read/hash resulting file
- -> update document row + event transactionally
- -> return verified result
-```
-
-Do not make SQLite the source of truth for a write that never reached the vault.
+Those changes are directionally correct. The problems below are implementation details that still break the intended guarantees.
 
 ---
 
-## Severity 1 — Reconciliation can delete documents outside a requested subtree
+# Severity 1 — Watcher confirmed deletion never tombstones the document
 
-### Evidence
+## Evidence
 
-`apps/api/src/services/reconcile.ts`
+`apps/api/src/services/watcher.ts` defines `emitDeleted()` as recording the event and broadcasting it. It does not update `documents.deleted_at`.
 
-`syncPath` changes the scan root, but the final deletion loop does:
+The current flow is effectively:
 
-```ts
-const allDocs = db.prepare('SELECT * FROM documents').all()
+```text
+unlink
+ -> wait 2s
+ -> emitDeleted()
+ -> document row remains active
 ```
 
-and compares every document against `seenPaths`.
+The document can therefore remain visible in `GET /api/documents` after its file has been deleted.
 
-`seenPaths` only contains files found below the requested target.
+## Consequences
 
-### Consequence
+- DB state says document is active while the file is gone.
+- A later recreate can interact with stale identity state.
+- Reconciliation and watcher can disagree about whether the document exists.
+- The tombstone model is only partially implemented.
 
-Reconciling one folder can make documents in unrelated folders appear missing and delete their database rows.
+## Required correction
 
-This is a silent data-loss path.
+Confirmed watcher deletion must perform the same authoritative state transition as the document service:
 
-### Required correction
+```text
+set deleted_at
+record deleted event
+broadcast deleted event
+```
 
-When `syncPath` is present:
-
-- only compare documents whose paths are inside that subtree,
-- never delete or mark unrelated documents as missing.
-
-Add a regression test proving a subtree reconcile cannot affect siblings.
+Do not duplicate slightly different deletion semantics in watcher and document service. Extract a shared document-state operation if necessary.
 
 ---
 
-## Severity 1 — Deleted document history is destroyed
+# Severity 1 — Reconciliation still hard-deletes document rows
 
-### Evidence
+## Evidence
 
-`apps/api/src/db/index.ts`
-
-`document_events.document_id` uses:
-
-```sql
-FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-```
-
-`reconcile.ts` later executes:
+`apps/api/src/services/reconcile.ts` still contains:
 
 ```sql
 DELETE FROM documents WHERE id = ?
 ```
 
-### Consequence
+inside the missing-document loop.
 
-Deleting the document row can cascade-delete the event history that was supposed to preserve the document lifecycle.
+This directly contradicts the tombstone design introduced by migration 3.
 
-### Required correction
+## Consequences
 
-Use a tombstone model instead of hard deletion.
+The branch claims document history survives deletion, but reconciliation can still remove the document identity row itself.
+
+A later query cannot reliably reconstruct the deleted document state from the document table.
+
+## Required correction
+
+Replace physical row deletion with:
+
+```text
+UPDATE documents
+SET deleted_at = timestamp,
+    updated_at = timestamp
+WHERE id = ?
+```
+
+then record exactly one `deleted` event.
+
+Do not delete historical document identities during reconciliation.
+
+---
+
+# Severity 1 — Create can overwrite an existing file before database safety is established
+
+## Evidence
+
+`apps/api/src/services/documentService.ts#createDocument()` resolves the target path and writes it before inserting the document row.
+
+There is no authoritative pre-write conflict check for an existing active document/path or an existing filesystem file that is not safely represented by the DB.
+
+The write sequence can therefore become:
+
+```text
+existing file exists
+ -> overwrite file
+ -> database INSERT fails or conflicts
+ -> old content is already gone
+```
+
+## Required correction
+
+Create must first establish that the path is safe to create.
+
+Required behavior:
+
+```text
+validate path + extension + size
+ -> check active document at path
+ -> check filesystem path
+ -> if already exists: return conflict/error without mutation
+ -> atomic write
+ -> verify hash
+ -> insert DB row
+```
+
+Never overwrite an existing user file through a create operation.
+
+Also define behavior for a tombstoned document whose old path is reused. Prefer explicit restore/reuse semantics over creating a second identity.
+
+---
+
+# Severity 1 — Update treats a missing live file as writable instead of as a conflict
+
+## Evidence
+
+`updateDocument()` verifies the filesystem hash only when the file exists:
+
+```text
+if (fs.existsSync(fullPath)) {
+    check hash
+}
+```
+
+When the expected document row exists but the real file is missing, the code continues to the write operation.
+
+## Consequence
+
+A user can delete the file externally, then a stale LOGOS update can recreate it without returning `409 Conflict`.
+
+That violates the intended live filesystem compare-and-swap contract.
+
+## Required correction
+
+For an active document update:
+
+```text
+DB says active
+AND expected version/hash match
+AND filesystem exists
+AND filesystem hash == expected hash
+```
+
+If the filesystem file is missing or has a different hash:
+
+```text
+409 Conflict
+no file mutation
+no DB mutation
+no document event
+```
+
+Deletion must be treated as a state change, not as an acceptable missing-file condition.
+
+---
+
+# Severity 1 — Cross-resource atomicity is still incomplete
+
+The branch now has real filesystem writes and DB updates, but the filesystem mutation and DB transaction are still separate operations.
+
+Examples:
+
+```text
+filesystem write succeeds
+ -> DB update fails
+```
+
+or:
+
+```text
+filesystem delete succeeds
+ -> DB tombstone update fails
+```
+
+The code has no rollback/recovery strategy for those cases.
+
+## Required correction
+
+Use the strongest practical local guarantee:
+
+1. validate all preconditions,
+2. perform filesystem operation using an atomic temp/rename or reversible delete strategy,
+3. verify final state,
+4. execute DB state change + event insertion in a single SQLite transaction,
+5. if the DB transaction fails, perform an explicit filesystem recovery action where possible,
+6. surface failure instead of claiming success.
+
+For deletes, consider moving the file into a controlled temporary/trash location before committing the tombstone, then removing it permanently only after the DB transaction succeeds.
+
+The implementation does not need distributed transactions, but it must have an explicit failure/recovery contract.
+
+---
+
+# Severity 1 — Writer identity still becomes incorrect for HTTP-triggered document writes
+
+## Evidence
+
+The route correctly resolves the public HTTP actor to `USER`.
+
+However, after `createDocument()` and `updateDocument()`, the route still calls:
+
+```text
+registerLogosWrite(...)
+```
+
+This records the operation as a LOGOS write for the watcher even though the actual route actor is `USER`.
+
+## Consequence
+
+A user-triggered write can be recorded as:
+
+```text
+writer = LOGOS
+```
+
+instead of:
+
+```text
+writer = USER
+```
+
+The actor model is therefore not yet trustworthy.
+
+## Required correction
+
+Remove the unconditional `registerLogosWrite()` call from HTTP user routes.
+
+Instead, carry a server-side operation identity from the actual actor context:
+
+```text
+USER
+LOGOS
+AGENT
+AUTOMATION
+```
+
+The watcher should match against operation records created by internal actors, not infer LOGOS identity merely because a route caused the write.
+
+---
+
+# Severity 1 — Internal update helper is broken
+
+## Evidence
+
+`apps/api/src/routes/documents.ts` defines:
+
+```text
+writeDocumentInternal(path, content, expectedVersion, expectedHash, context)
+```
+
+but calls `updateDocument()` with:
+
+```text
+id: ''
+```
+
+The comment claims the ID will be resolved by path, but `updateDocument()` actually loads the document by ID.
+
+Therefore the helper cannot successfully update an existing document.
+
+## Required correction
+
+Do not place internal document service APIs in a route module.
+
+Move them into `documentService.ts` and define one correct internal API, for example:
+
+```ts
+updateDocumentInternal({
+  id,
+  content,
+  expectedVersion,
+  expectedHash,
+  actor,
+})
+```
+
+If path-based lookup is intentionally supported, implement that explicitly rather than passing an empty ID.
+
+---
+
+# Severity 1 — Reconciliation still has incorrect rename/delete semantics for tombstones
+
+The new unique-hash logic is better, but it searches the document table without consistently excluding deleted/tombstoned rows.
+
+A tombstoned document can therefore become a candidate for a new file with matching content.
+
+## Required correction
+
+Define candidate sets explicitly:
+
+```text
+active candidates
+= deleted_at IS NULL
+```
+
+For a new filesystem file:
+
+```text
+active unique candidate
+ -> possible rename/move
+multiple candidates or only tombstoned candidates
+ -> create new identity or explicit restore flow
+```
+
+Never silently resurrect a historical document merely because content hashes match.
+
+---
+
+# Severity 1 — Watcher rename state can leak and old pending state is not fully cleared
+
+The watcher uses:
+
+```text
+pending_delete
+pending_rename
+```
+
+When a rename/move match is found, the implementation updates the database and stores a `pending_rename` state for the new path.
+
+The old path's expiration handler can see the new pending state and avoid deletion, but the old pending state is not explicitly removed in that branch.
+
+This leaves stale state in `pathStates` until another event happens to clean it.
+
+## Required correction
+
+When a rename/move is resolved:
+
+```text
+old pending delete -> delete immediately
+new path -> no pending state unless a new operation is actually pending
+```
+
+A successful rename/move should end with no stale state for either path.
+
+Add tests that assert internal pending state is empty after rename/move completion.
+
+---
+
+# Severity 2 — `getOrCreateDocumentIdentity()` still violates idempotence
+
+The function in `apps/api/src/db/index.ts` still increments the document version whenever the path exists, even if the incoming content hash is identical.
+
+The watcher currently performs an upstream no-op check, but the database helper itself is not safe as a general document state primitive.
+
+## Required correction
+
+Make the primitive itself idempotent:
+
+```text
+same path + same hash
+ -> same version
+ -> no event
+```
+
+A document identity helper should never manufacture semantic changes from duplicate notifications.
+
+---
+
+# Severity 2 — SSE contract mismatch: `reconcile-complete` vs `sync-complete`
+
+`reconcile.ts` broadcasts:
+
+```text
+reconcile-complete
+```
+
+The browser hook listens for:
+
+```text
+sync-complete
+```
+
+This is an explicit producer/consumer contract mismatch.
+
+## Required correction
+
+Choose one canonical event name and use it everywhere.
 
 Preferred:
 
 ```text
-documents.deleted_at nullable
+reconcile-complete
 ```
 
-Keep the row and keep its events.
+because it describes the operation actually being reported.
 
-Do not use cascade deletion for document history.
-
-A deleted document must remain historically queryable.
+Update the shared contract and browser hook accordingly.
 
 ---
 
-## Severity 1 — Rename detection is emitted too late and also emits the wrong event sequence
+# Severity 2 — SSE hook reconnects unnecessarily because callback identity changes
 
-### Evidence
+`useVaultEvents()` includes `onEvent` and `onConnectionChange` in the `connect()` dependency list.
 
-`apps/api/src/services/watcher.ts`
+`VaultContent` creates those callbacks inline on every render.
 
-On `unlink`, the implementation immediately records and broadcasts `deleted`, while also placing the document in `pendingDeletes`.
+Therefore the hook can recreate the EventSource whenever component state changes, even when the underlying connection is healthy.
 
-When a matching `add` arrives later, it then records `renamed` or `moved`.
+## Required correction
 
-### Consequence
+Use stable callback refs or `useCallback()` around consumer callbacks, or make the hook store callbacks in refs so connection lifecycle does not depend on render identity.
 
-A normal rename can produce:
-
-```text
-deleted
-renamed
-```
-
-instead of one semantic rename event.
-
-The UI can briefly believe a document was deleted when it was only renamed.
-
-### Required correction
-
-For an unlink:
-
-```text
-store pending deletion
-wait bounded window
-if matching add arrives -> rename/move
-otherwise -> confirmed delete
-```
-
-Do not publish `deleted` during the pending window.
-
-Clear pending entries when the watcher stops.
-
-Remove unused `pendingAdds` code unless it becomes part of a real algorithm.
+The EventSource connection should be stable across ordinary UI renders.
 
 ---
 
-## Severity 1 — Reconciliation rename detection can misclassify duplicate content as a rename
+# Severity 2 — API authentication is still not actually installed
 
-### Evidence
+The repository contains API-key authentication code, but `apps/api/src/server.ts` still does not install authentication middleware.
 
-`reconcile.ts` uses:
+The API now binds to `127.0.0.1`, which is an improvement, but wildcard CORS plus unauthenticated mutation endpoints still means arbitrary web pages may be able to issue requests to the local API.
 
-```ts
-getDocumentByHash(contentHash)
-```
+## Required correction
 
-and immediately treats the match as rename/move when the current path has no document row.
+Before considering the local API boundary complete, choose one explicit model:
 
-### Consequence
+### Preferred local model
 
-Two files may legitimately contain identical content.
+- bind `127.0.0.1`,
+- restrict CORS to the configured web origin,
+- protect mutation endpoints with a local auth mechanism or a secret token,
+- do not expose mutating routes to arbitrary origins.
 
-A new second file with identical content is not necessarily a rename.
-
-A hash-only global lookup can attach the new path to the wrong document identity.
-
-### Required correction
-
-Rename/move detection during reconciliation must require evidence:
-
-1. old path is absent,
-2. candidate document is uniquely identifiable,
-3. no conflicting duplicate file remains at the old path,
-4. only then classify as rename/move.
-
-If identity is ambiguous, report `created` and preserve the old identity.
-
-Never silently steal identity between duplicate-content documents.
+If authentication is intentionally deferred, state that explicitly and treat any non-local bind as unsupported.
 
 ---
 
-## Severity 1 — Reconciliation is not safe against scan errors and large files
+# Severity 2 — Path and file eligibility are not enforced at the document-service boundary
 
-### Evidence
-
-`scanMarkdownFiles()` recursively scans the tree without enforcing the same ignore policy and file-size guard used by the watcher.
-
-`reconcile()` reads files before checking the configured maximum size.
-
-### Consequence
-
-Reconciliation can:
-
-- inspect ignored folders/files,
-- read oversized Markdown files into memory,
-- produce inconsistent results after partial filesystem errors.
-
-### Required correction
-
-Centralize Markdown file eligibility:
+Watcher and reconciliation use shared eligibility, but `documentService.createDocument()` and `updateDocument()` accept arbitrary paths without explicitly checking:
 
 ```text
-isSupportedMarkdownPath()
-shouldIgnorePath()
-checkFileSize()
+.md / .markdown
+ignored patterns
+10 MB byte limit
 ```
 
-Use the same rules in watcher and reconciliation.
+The public route schema limits characters, not actual UTF-8 byte size, and accepts arbitrary extensions.
 
-A read/stat failure must not be interpreted as a deletion.
+## Required correction
 
-A reconciliation with scan errors should return a failed/partial result rather than silently mutating missing documents.
+The authoritative document service must enforce its own invariants.
+
+Do not rely on a caller or watcher to enforce security-sensitive file rules.
 
 ---
 
-## Severity 1 — Conflict detection is not yet a real filesystem concurrency guarantee
+# Severity 2 — Delete query parameters are not schema-validated
 
-### Evidence
-
-`writeDocument()` correctly checks expected version/hash against the DB row.
-
-However, the file itself is not read immediately before the write and there is no atomic compare/write cycle against the actual vault state.
-
-`reconcile.ts` also attempts conflict inference from a `document_events` query, but that does not establish a reliable compare-and-swap relationship with the live filesystem.
-
-### Required correction
-
-For a document write, establish one explicit concurrency contract:
+`DELETE /api/documents/:id` parses:
 
 ```text
-client snapshot
- -> server checks DB snapshot
- -> server checks current filesystem hash
- -> server writes atomically
- -> server verifies resulting hash
- -> server commits new version/event
+expectedVersion
+expectedHash
 ```
 
-Any mismatch with the expected snapshot returns `409` and changes nothing.
+manually from `req.query`.
 
-Add a test where the file changes after the client reads it but before the write commits.
+This bypasses the project's Zod validation boundary.
+
+## Required correction
+
+Define a Zod schema for delete query/body parameters and validate it through the existing middleware.
 
 ---
 
-## Severity 1 — Writer identity is client-controlled
+# Severity 2 — Document route IDs should use UUID validation
 
-### Evidence
-
-`documents.ts` accepts:
-
-```ts
-writer: z.enum(['USER', 'LOGOS', 'AGENT', 'AUTOMATION'])
-```
-
-### Consequence
-
-A caller can claim to be `LOGOS`, `AGENT`, or `AUTOMATION` merely by putting that value in JSON.
-
-### Required correction
-
-Writer identity must come from the server-side execution context.
-
-For example:
+The document route currently accepts:
 
 ```text
-HTTP user session -> USER
-LOGOS internal service -> LOGOS
-agent execution context -> AGENT
-scheduler execution context -> AUTOMATION
+id: z.string().min(1)
 ```
 
-Do not trust a public request body field as proof of actor identity.
+while the schema package already has a UUID definition.
+
+## Required correction
+
+Use one shared UUID schema for document IDs.
 
 ---
 
-## Severity 1 — API is not safe to expose on a network
+# Severity 2 — The current tests do not test the new P0.4.1 document service
 
-### Evidence
+The existing `concurrency.test.ts` still imports and tests `writeDocument()` from `apps/api/src/db/index.ts`.
 
-`apps/api/src/server.ts` does not install the available `apiKeyAuth` middleware.
-
-`apps/api/src/config/index.ts` uses wildcard CORS by default.
-
-`apps/api/src/index.ts` calls `server.listen(config.port)` without an explicit local-only host.
-
-### Consequence
-
-The current API exposes document write/delete operations without the authorization layer that already exists in the codebase.
-
-### Required correction
-
-For the local-first LOGOS runtime:
+It does not exercise:
 
 ```text
+documentService.createDocument()
+documentService.updateDocument()
+documentService.deleteDocument()
+watcher
+reconcile
+SSE
+```
+
+The branch commit message says 14 tests pass, but the important new hardening behavior is not adequately covered by the visible test files.
+
+## Required correction
+
+Add integration tests against temporary filesystem/database fixtures for the actual P0.4.1 service path.
+
+Do not treat unit tests for the old DB helper as proof of the new document service.
+
+---
+
+# Severity 2 — Current tests still contain no real watcher/reconcile integration matrix
+
+The acceptance specification calls for:
+
+```text
+create
+modify
+delete
+rename
+move
+rapid edits
+duplicate content
+scoped reconcile
+read error
+oversized file
+restart
+```
+
+The visible tests do not cover this end-to-end behavior.
+
+## Required correction
+
+Implement deterministic temporary-vault integration tests.
+
+Where true OS races are difficult to reproduce, inject a controlled hook/barrier into the document service so the race is deterministic and testable.
+
+---
+
+# Severity 2 — Vault page still nests `Shell`
+
+`apps/web/app/layout.tsx` already wraps all pages with:
+
+```text
+<Shell>{children}</Shell>
+```
+
+`apps/web/app/vault/page.tsx` also imports and renders `Shell` around loading, error, and normal states.
+
+This creates nested application shells.
+
+## Required correction
+
+Pages must render page content only. `Shell` belongs in the root layout.
+
+---
+
+# Severity 2 — Vault actions are still presented as if implemented
+
+The current Vault page still contains handlers that call `console.log()` or use browser `prompt()`/`confirm()` followed by comments such as "Implement ... API call".
+
+Visible actions include:
+
+```text
+Edit
+Rename
+Move
+Archive
+Show related
+Find conflicts
+```
+
+## Required correction
+
+Until the underlying backend exists:
+
+- remove those actions, or
+- render them disabled with a clear unavailable state.
+
+Do not make a UI action look operational when it is not.
+
+---
+
+# Severity 2 — Memory page still uses fabricated fallback records
+
+`apps/web/app/memory/page.tsx` still populates example memories when the API request fails.
+
+This remains a production truthfulness violation.
+
+## Required correction
+
+On API failure:
+
+```text
+show error state
+provide retry
+leave data empty
+```
+
+Never invent memory to make the interface look populated.
+
+---
+
+# Severity 2 — System page still bypasses MUI
+
+`apps/web/app/system/page.tsx` still uses raw HTML and inline styling.
+
+## Required correction
+
+Use MUI throughout the page and pull all semantic colors from the centralized theme.
+
+Keep technical detail here, but do not regress into a separate ad-hoc visual system.
+
+---
+
+# Severity 2 — Settings page still contains no-op controls and machine-specific configuration
+
+`apps/web/app/settings/page.tsx` still has controls whose `onChange` handlers do nothing and includes a concrete local Windows vault path.
+
+## Required correction
+
+Only render settings that are actually backed by state.
+
+For future settings, use:
+
+```text
+Not available yet
+```
+
+or disable the control and explain the phase dependency.
+
+Remove machine-specific paths from UI.
+
+---
+
+# Severity 2 — Theme control is still not functional and system preference can override product default
+
+`ThemeRegistry.tsx` still checks `prefers-color-scheme` and can select light mode before the user's explicit setting.
+
+`Shell.tsx` still displays a theme-looking icon button that is not wired to `useThemeMode()`.
+
+## Required correction
+
+The product default is dark.
+
+Use:
+
+```text
+stored user preference -> use it
+no stored preference -> dark
+```
+
+The visible theme button must actually toggle the shared registry state.
+
+---
+
+# Severity 2 — Purple secondary palette remains in the supposedly warm LOGOS theme
+
+`apps/web/src/theme/theme.ts` still defines a purple `secondary` palette.
+
+This conflicts with the current warm, restrained product identity.
+
+## Required correction
+
+Remove unused purple/indigo product identity.
+
+Retain only the temporary warm semantic accent until the final brand palette is supplied.
+
+---
+
+# Severity 2 — `.env.example` still contains a machine-specific Windows path and localhost endpoint
+
+The example environment still contains:
+
+```text
+LOGOS_WORKSPACE_ROOT=D:/Project/LOGOS/storage/workspace/vault
+LOGOS_API_URL=http://localhost:3001
+NEXT_PUBLIC_API_URL=http://localhost:3001
+```
+
+## Required correction
+
+Use environment-driven placeholders:
+
+```text
+LOGOS_HOME=~/.logos
+LOGOS_WORKSPACE_ROOT=
+LOGOS_API_URL=http://127.0.0.1:3001
+PORT=3001
 HOST=127.0.0.1
 ```
 
-should be the default.
-
-Direct API mutation routes must not become remotely reachable without authentication.
-
-Either:
-
-- bind locally and document the local-only boundary, or
-- enforce authentication and permission checks on all mutation routes.
-
-Do both before any deployment beyond the local machine.
+Prefer same-origin browser requests and keep backend connection targets server-side.
 
 ---
 
-## Severity 2 — Document version increments even when content did not change
+# Severity 2 — Runtime phase metadata remains P0.3.1
 
-### Evidence
-
-`getOrCreateDocumentIdentity()` increments `version` whenever the path already exists, even when the new hash equals `current_hash`.
-
-### Consequence
-
-Repeated watcher events can inflate versions without a semantic change.
-
-### Required correction
-
-If:
-
-```text
-existing.current_hash === incomingHash
-```
-
-then do not bump the document version.
-
-Emit no new `modified` event unless there is a real state change.
-
----
-
-## Severity 2 — LOGOS self-write registration is incomplete
-
-### Evidence
-
-`registerLogosWrite()` is keyed by path and content hash.
-
-Delete does not register a LOGOS operation before unlinking.
-
-Rename/move operations have no equivalent actor registration.
-
-### Required correction
-
-Track a server-side operation token or operation record containing:
-
-```text
-operationId
-documentId
-oldPath
-newPath
-expectedHash
-actor
-createdAt
-```
-
-The watcher should use it to recognize its own filesystem effects without duplicating state changes.
-
----
-
-## Severity 2 — SSE backend exists but the browser is not actually consuming it
-
-### Evidence
-
-The API exposes `/events/vault` and a Next proxy exists at:
-
-```text
-apps/web/app/api/vault/events/route.ts
-```
-
-But there is no `EventSource` consumer in the current web component tree.
-
-### Required correction
-
-Implement:
-
-```text
-EventSource('/api/vault/events')
- -> on message/event
- -> invalidate relevant document query
- -> refetch
- -> update UI
-```
-
-Do not copy the database into React state.
-
-Include reconnect behavior and connection state.
-
----
-
-## Severity 2 — Vault UI is still partially fake
-
-### Evidence
-
-`apps/web/app/vault/page.tsx`:
-
-- preview content is explicitly placeholder text,
-- edit/rename/move/archive/show-related/find-conflicts handlers only log to the console,
-- raw HTML is rendered with `dangerouslySetInnerHTML` after Markdown parsing,
-- the page wraps itself in `Shell` even though the root layout already wraps all pages in `Shell`.
-
-### Required correction
-
-The Vault page must:
-
-- fetch and show the real document content,
-- disable actions until implemented or implement them,
-- sanitize rendered Markdown HTML,
-- use one Shell only,
-- hide raw filesystem paths unless explicitly requested.
-
----
-
-## Severity 2 — Home still invents project semantics
-
-### Evidence
-
-`apps/web/app/page.tsx` converts every document into a `Project` object.
-
-`HomeClient.tsx` hardcodes:
-
-```text
-status = active
-nextAction = Continue editing
-```
-
-The API does not yet have real project entities; P1.0 is the roadmap phase for that.
-
-### Required correction
-
-Until P1.0 exists, Home must not call arbitrary documents "projects".
-
-Use honest sections such as:
-
-```text
-Recent
-Recent document activity
-```
-
-or show an empty Continue Working section stating that project entities arrive in P1.0.
-
-Do not fabricate status or next action.
-
----
-
-## Severity 2 — Home cannot populate Needs Attention
-
-`attentionItems` is initialized to an empty array and never loaded from any backend source.
-
-Therefore the section can never represent real conflicts.
-
-### Required correction
-
-Populate it from actual reconciliation/conflict state, or leave the section absent.
-
----
-
-## Severity 2 — Home project click can point to a route that does not exist
-
-`HomeClient.tsx` navigates to:
-
-```text
-/work/{project.id}
-```
-
-but the current tree only contains:
-
-```text
-apps/web/app/work/page.tsx
-```
-
-There is no dynamic `/work/[id]` route in this branch.
-
-### Required correction
-
-Do not link to a non-existent route.
-
----
-
-## Severity 2 — Theme behavior violates the chosen product default
-
-`ThemeRegistry.tsx` checks the operating-system color preference and can start in light mode.
-
-The LOGOS UI spec says dark is the product default.
-
-`Shell.tsx` also renders a theme-looking icon button that is not connected to `useThemeMode()`.
-
-### Required correction
-
-- dark is the default,
-- user setting overrides it,
-- system preference must not silently override the product default,
-- the visible theme control must actually work.
-
----
-
-## Severity 2 — System page still bypasses MUI
-
-`apps/web/app/system/page.tsx` uses raw `div`, `section`, `h1`, `h2`, `pre`, and inline styles.
-
-### Required correction
-
-Rebuild System entirely with MUI components and centralized theme tokens.
-
----
-
-## Severity 2 — Settings contains non-functional controls and a machine-specific path
-
-`apps/web/app/settings/page.tsx` contains hardcoded values, no-op change handlers, and:
-
-```text
-D:\Project\LOGOS\storage\workspace\vault
-```
-
-### Required correction
-
-Do not present non-functional settings as active configuration.
-
-Use real values from the API or mark future settings as unavailable/coming later.
-
-Do not hardcode a developer's machine path in the product UI.
-
----
-
-## Severity 2 — Environment configuration still contains hardcoded localhost / Windows examples
-
-`.env.example` contains a concrete Windows vault path and `NEXT_PUBLIC_API_URL=http://localhost:3001`.
-
-`next.config.js` also hardcodes `http://localhost:3001`.
-
-### Required correction
-
-Use environment-driven configuration.
-
-Prefer same-origin browser requests through `/api/*` and `/api/vault/events`.
-
-Keep backend target configuration server-side.
-
-Do not ship machine-specific paths in source.
-
----
-
-## Severity 2 — Runtime phase metadata is wrong for a P0.4 branch
-
-`apps/api/src/config/index.ts` still says:
+`apps/api/src/config/index.ts` still reports:
 
 ```text
 version: 0.3.1
 activePhase: P0.3.1
 ```
 
-### Required correction
+That metadata is stale for a P0.4.1 branch.
 
-Phase metadata must describe the actual branch/runtime state.
+## Required correction
 
-For the hardening branch, use an explicit P0.4.1 identity until the phase is accepted.
+Set explicit P0.4.1 phase metadata until acceptance passes.
 
-Do not mark P0.4 complete while its acceptance matrix is failing.
-
----
-
-## Severity 3 — Duplicate architecture and stale dependencies remain
-
-Examples:
-
-- `apps/api/src/schemas/index.ts` duplicates route-local Zod schemas.
-- `@prisma/config` remains in root development dependencies even though the runtime database implementation is better-sqlite3.
-- `packages/core/src/filesystem.ts` contains a second, weaker path-safety implementation and does not match `apps/api/src/fs/safePath.ts`.
-- `packages/contracts/src/index.ts` still defines an older `VaultEvent` model (`add/change/unlink`) that does not match the P0.4 event model (`created/modified/deleted/renamed/moved`).
-
-### Required correction
-
-There must be one canonical implementation for each responsibility.
-
-Either make the shared package authoritative or remove the duplicate.
-
-Do not keep old abstractions merely because they already exist.
+Never use phase metadata to claim completion automatically.
 
 ---
 
-## Severity 3 — Web toolchain is internally inconsistent
+# Severity 3 — Duplicate filesystem implementations remain
 
-`apps/web/package.json` declares React 19 while its development dependencies declare React type packages 18 and an older Next ESLint configuration.
+`packages/core/src/filesystem.ts` still contains the older weaker path containment logic, while `apps/api/src/fs/safePath.ts` contains the stronger implementation.
 
-### Required correction
+## Required correction
 
-Normalize the web toolchain before further UI work.
+Keep one canonical secure filesystem implementation.
 
-At minimum verify:
+Either:
+
+- move the strong implementation into the shared core package and use it everywhere,
+- or remove the weaker shared implementation until it is rewritten.
+
+Do not leave two competing path-security definitions in the repository.
+
+---
+
+# Severity 3 — Shared contracts remain stale
+
+`packages/contracts/src/index.ts` still defines the old watcher vocabulary:
 
 ```text
-npm ls react react-dom @types/react @types/react-dom next eslint-config-next
+add
+change
+unlink
+unlinkDir
 ```
 
-and make the versions intentionally compatible with the installed Next/MUI stack.
+while P0.4 uses:
+
+```text
+created
+modified
+deleted
+renamed
+moved
+```
+
+## Required correction
+
+Align the shared contract with the actual P0.4 event model.
+
+The same contract should be used by backend event producers and browser consumers.
 
 ---
 
-## Final gate
+# Severity 3 — Canonical project direction docs were replaced rather than preserved
 
-The branch is **not ready for P0.5** until all Severity 1 and Severity 2 findings are closed and the acceptance matrix passes.
+The hardening commit removed the earlier canonical direction documents and replaced them with an audit pack in `docs/`.
+
+This is risky because future work can lose the original product architecture, UI rules, roadmap, and subagent behavior instructions.
+
+## Required correction
+
+Restore or relocate canonical project-direction documents alongside the audit pack.
+
+Audit instructions are supplementary; they should not replace the project's permanent architecture/product specification.
+
+---
+
+# Severity 3 — Commit identity still says ORION
+
+The current hardening commit metadata uses:
+
+```text
+author: ORION <orion@example.com>
+```
+
+This is not a runtime defect, but it is stale identity metadata in a project now named LOGOS.
+
+## Required correction
+
+Use LOGOS-consistent Git identity for future commits where practical.
+
+---
+
+# Final gate
+
+The branch is **not ready for P0.5**.
+
+At minimum, all Severity 1 and Severity 2 findings above must be resolved and the integration acceptance matrix must pass against the actual P0.4.1 service path.

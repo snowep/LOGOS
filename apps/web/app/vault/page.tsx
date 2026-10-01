@@ -46,7 +46,6 @@ import {
 } from '@mui/icons-material';
 import { marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
-import Shell from '../components/Shell';
 import { useVaultEvents, VaultEvent, ConnectionState } from '@/hooks/useVaultEvents';
 
 // Define knowledge categories with const assertions for literal types
@@ -403,34 +402,30 @@ function VaultContent() {
 
   if (loading) {
     return (
-      <Shell>
-        <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center' }}>
-          <CircularProgress />
-        </Box>
-      </Shell>
+      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress />
+      </Box>
     );
   }
 
   if (error) {
     return (
-      <Shell>
-        <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
-          <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
-            <Alert severity="error" sx={{ mb: 2 }}>
-              <AlertTitle>Failed to load documents</AlertTitle>
-              {error}
-            </Alert>
-            <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'center', gap: 2 }}>
-              <Button variant="contained" color="primary" onClick={handleRefresh}>
-                Retry
-              </Button>
-              <Button variant="outlined" onClick={() => window.location.reload()}>
-                Reload Page
-              </Button>
-            </Box>
-          </Paper>
-        </Box>
-      </Shell>
+      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+        <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            <AlertTitle>Failed to load documents</AlertTitle>
+            {error}
+          </Alert>
+          <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'center', gap: 2 }}>
+            <Button variant="contained" color="primary" onClick={handleRefresh}>
+              Retry
+            </Button>
+            <Button variant="outlined" onClick={() => window.location.reload()}>
+              Reload Page
+            </Button>
+          </Box>
+        </Paper>
+      </Box>
     );
   }
 
@@ -525,192 +520,190 @@ function VaultContent() {
   };
 
   return (
-    <Shell>
-      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', bgcolor: '#0a0a0a', color: '#fafafa' }}>
-        {/* Knowledge Pane - 200px */}
-        <Box sx={{ width: 200, borderRight: '1px solid #27272a', p: 2, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
-              KNOWLEDGE
-            </Typography>
-            <Tooltip title="Refresh">
-              <IconButton size="small" onClick={handleRefresh} aria-label="Refresh">
-                <Sync fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </Box>
-          <List dense>
-            {knowledgeCategories.map((cat) => (
-              <ListItem key={cat.key} sx={{ mb: 0.5, px: 0 }}>
-                <ListItemButton
-                  selected={selectedCategory === cat.key}
-                  onClick={() => handleCategorySelect(cat.key)}
-                  sx={{
-                    borderRadius: 2,
-                    py: 0.75,
-                    '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
-                    ...(selectedCategory === cat.key && { bgcolor: 'rgba(99,102,241,0.12)' }),
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 36, color: selectedCategory === cat.key ? '#818cf8' : '#a1a1aa' }}>
-                    {cat.icon}
-                  </ListItemIcon>
-                  <ListItemText primary={cat.label} sx={{ variant: 'body2', fontWeight: 500 }} />
-                </ListItemButton>
-              </ListItem>
-            ))}
-          </List>
+    <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', bgcolor: 'background.default', color: 'text.primary' }}>
+      {/* Knowledge Pane - 200px */}
+      <Box sx={{ width: 200, borderRight: 1, borderColor: 'divider', p: 2, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6" gutterBottom color="text.primary" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+            KNOWLEDGE
+          </Typography>
+          <Tooltip title="Refresh">
+            <IconButton size="small" onClick={handleRefresh} aria-label="Refresh">
+              <Sync fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Box>
+        <List dense>
+          {knowledgeCategories.map((cat) => (
+            <ListItem key={cat.key} sx={{ mb: 0.5, px: 0 }}>
+              <ListItemButton
+                selected={selectedCategory === cat.key}
+                onClick={() => handleCategorySelect(cat.key)}
+                sx={{
+                  borderRadius: 2,
+                  py: 0.75,
+                  '&:hover': { bgcolor: 'action.hover' },
+                  ...(selectedCategory === cat.key && { bgcolor: 'action.selected' }),
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 36, color: selectedCategory === cat.key ? 'primary.main' : 'text.secondary' }}>
+                  {cat.icon}
+                </ListItemIcon>
+                <ListItemText primary={cat.label} sx={{ variant: 'body2', fontWeight: 500 }} />
+              </ListItemButton>
+            </ListItem>
+          ))}
+        </List>
+      </Box>
 
-        {/* Documents Pane - 320px */}
-        <Box sx={{ width: 320, minWidth: 320, borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column', flexShrink: 0, bgcolor: '#0d0d0d' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: '1px solid #27272a' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-              <Typography variant="h5" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
-                DOCUMENTS
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ConnectionIndicator state={connectionState} />
-                <Tooltip title={showPaths ? 'Hide paths' : 'Show paths'}>
-                  <IconButton size="small" onClick={() => setShowPaths(!showPaths)} aria-label={showPaths ? 'Hide paths' : 'Show paths'}>
-                    {showPaths ? <VisibilityOff fontSize="small" /> : <InsertDriveFile fontSize="small" />}
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            </Box>
-          </Box>
-          
-          <Box sx={{ p: 2, borderBottom: '1px solid #27272a' }}>
-            <TextField
-              placeholder="Search documents..."
-              value={searchQuery}
-              onChange={handleSearchChange}
-              size="small"
-              sx={{ width: '100%' }}
-            />
-          </Box>
-          
-          <Divider sx={{ m: 0 }} />
-          
-          <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-            <List dense>
-              {filteredDocuments.length === 0 ? (
-                <ListItem sx={{ px: 2, py: 4, textAlign: 'center' }}>
-                  <ListItemText primary="No documents found" sx={{ color: '#a1a1aa', variant: 'body2' }} />
-                </ListItem>
-              ) : (
-                filteredDocuments.map((doc) => (
-                  <ListItem key={doc.id} sx={{ mb: 0.5, px: 1 }}>
-                    <ListItemButton
-                      selected={selectedDocument?.id === doc.id}
-                      onClick={() => handleDocumentSelect(doc)}
-                      sx={{
-                        borderRadius: 2,
-                        py: 0.75,
-                        '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
-                        ...(selectedDocument?.id === doc.id && { bgcolor: 'rgba(99,102,241,0.12)' }),
-                      }}
-                    >
-                      <ListItemIcon sx={{ minWidth: 36, color: '#a1a1aa' }}>
-                        <InsertDriveFile fontSize="small" />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={doc.name}
-                        secondary={showPaths ? doc.path : `v${doc.version || 1} • ${doc.lastWriter || '—'} • ${new Date(doc.modified).toLocaleDateString()}`}
-                        sx={{ primary: { variant: 'body2', fontWeight: 500 }, secondary: { variant: 'caption', color: 'text.secondary' } }}
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                ))
-              )}
-            </List>
-          </Box>
-        </Box>
-
-        {/* Preview Pane - remaining */}
-        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: '#0a0a0a' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: '1px solid #27272a' }}>
-            <Typography variant="h5" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
-              PREVIEW
+      {/* Documents Pane - 320px */}
+      <Box sx={{ width: 320, minWidth: 320, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', flexShrink: 0, bgcolor: 'background.paper' }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Typography variant="h5" gutterBottom color="text.primary" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+              DOCUMENTS
             </Typography>
-            {selectedDocument && (
-              <Tooltip title="Actions">
-                <IconButton onClick={(e) => handleMenuOpen(e, selectedDocument)} aria-controls="document-menu" aria-haspopup="true">
-                  <MoreVert />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ConnectionIndicator state={connectionState} />
+              <Tooltip title={showPaths ? 'Hide paths' : 'Show paths'}>
+                <IconButton size="small" onClick={() => setShowPaths(!showPaths)} aria-label={showPaths ? 'Hide paths' : 'Show paths'}>
+                  {showPaths ? <VisibilityOff fontSize="small" /> : <InsertDriveFile fontSize="small" />}
                 </IconButton>
               </Tooltip>
-            )}
-          </Box>
-          <Divider sx={{ m: 0 }} />
-          {selectedDocument ? (
-            renderDocumentContent(selectedDocument)
-          ) : (
-            <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a1a1aa', p: 4, textAlign: 'center' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                <InsertDriveFile fontSize="large" sx={{ opacity: 0.3 }} />
-                <Typography variant="body1">Select a document to preview</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Choose a document from the middle pane to view its content here.
-                </Typography>
-              </Box>
             </Box>
-          )}
-
-          {/* Actions Menu */}
-          <Menu
-            id="document-menu"
-            anchorEl={anchorEl}
-            open={Boolean(anchorEl)}
-            onClose={handleMenuClose}
-            sx={{ '& .MuiPaper-root': { bgcolor: '#18181b', border: '1px solid #27272a' } }}
-          >
-            <MenuItem onClick={handleAskLogos} sx={{ '&:hover': { bgcolor: 'rgba(99,102,241,0.12)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Memory fontSize="small" color="primary" />
-                Ask LOGOS
-              </Box>
-            </MenuItem>
-            <MenuItem onClick={handleEdit} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Edit fontSize="small" />
-                Edit
-              </Box>
-            </MenuItem>
-            <MenuItem onClick={handleRename} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Edit fontSize="small" />
-                Rename
-              </Box>
-            </MenuItem>
-            <MenuItem onClick={handleMove} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Share fontSize="small" />
-                Move
-              </Box>
-            </MenuItem>
-            <MenuItem onClick={handleArchive} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Delete fontSize="small" color="warning" />
-                Archive
-              </Box>
-            </MenuItem>
-            <Divider />
-            <MenuItem onClick={handleShowRelated} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Share fontSize="small" />
-                Show related
-              </Box>
-            </MenuItem>
-            <MenuItem onClick={handleFindConflicts} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <SyncProblem fontSize="small" color="warning" />
-                Find conflicts
-              </Box>
-            </MenuItem>
-          </Menu>
+          </Box>
+        </Box>
+        
+        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <TextField
+            placeholder="Search documents..."
+            value={searchQuery}
+            onChange={handleSearchChange}
+            size="small"
+            sx={{ width: '100%' }}
+          />
+        </Box>
+        
+        <Divider sx={{ m: 0 }} />
+        
+        <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <List dense>
+            {filteredDocuments.length === 0 ? (
+              <ListItem sx={{ px: 2, py: 4, textAlign: 'center' }}>
+                <ListItemText primary="No documents found" sx={{ color: 'text.secondary', variant: 'body2' }} />
+              </ListItem>
+            ) : (
+              filteredDocuments.map((doc) => (
+                <ListItem key={doc.id} sx={{ mb: 0.5, px: 1 }}>
+                  <ListItemButton
+                    selected={selectedDocument?.id === doc.id}
+                    onClick={() => handleDocumentSelect(doc)}
+                    sx={{
+                      borderRadius: 2,
+                      py: 0.75,
+                      '&:hover': { bgcolor: 'action.hover' },
+                      ...(selectedDocument?.id === doc.id && { bgcolor: 'action.selected' }),
+                    }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 36, color: 'text.secondary' }}>
+                      <InsertDriveFile fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={doc.name}
+                      secondary={showPaths ? doc.path : `v${doc.version || 1} • ${doc.lastWriter || '—'} • ${new Date(doc.modified).toLocaleDateString()}`}
+                      sx={{ primary: { variant: 'body2', fontWeight: 500 }, secondary: { variant: 'caption', color: 'text.secondary' } }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))
+            )}
+          </List>
         </Box>
       </Box>
-    </Shell>
+
+      {/* Preview Pane - remaining */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="h5" gutterBottom color="text.primary" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+            PREVIEW
+          </Typography>
+          {selectedDocument && (
+            <Tooltip title="Actions">
+              <IconButton onClick={(e) => handleMenuOpen(e, selectedDocument)} aria-controls="document-menu" aria-haspopup="true">
+                <MoreVert />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+        <Divider sx={{ m: 0 }} />
+        {selectedDocument ? (
+          renderDocumentContent(selectedDocument)
+        ) : (
+          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'text.secondary', p: 4, textAlign: 'center' }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+              <InsertDriveFile fontSize="large" sx={{ opacity: 0.3 }} />
+              <Typography variant="body1">Select a document to preview</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Choose a document from the middle pane to view its content here.
+              </Typography>
+            </Box>
+          </Box>
+        )}
+
+        {/* Actions Menu */}
+        <Menu
+          id="document-menu"
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={handleMenuClose}
+          sx={{ '& .MuiPaper-root': { bgcolor: 'background.paper', border: 1, borderColor: 'divider' } }}
+        >
+          <MenuItem onClick={handleAskLogos} sx={{ '&:hover': { bgcolor: 'action.hover' } }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Memory fontSize="small" color="primary" />
+              Ask LOGOS
+            </Box>
+          </MenuItem>
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Edit fontSize="small" />
+              Edit (coming soon)
+            </Box>
+          </MenuItem>
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Edit fontSize="small" />
+              Rename (coming soon)
+            </Box>
+          </MenuItem>
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Share fontSize="small" />
+              Move (coming soon)
+            </Box>
+          </MenuItem>
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Delete fontSize="small" color="warning" />
+              Archive (coming soon)
+            </Box>
+          </MenuItem>
+          <Divider />
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Share fontSize="small" />
+              Show related (coming soon)
+            </Box>
+          </MenuItem>
+          <MenuItem disabled sx={{ opacity: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SyncProblem fontSize="small" color="warning" />
+              Find conflicts (coming soon)
+            </Box>
+          </MenuItem>
+        </Menu>
+      </Box>
+    </Box>
   );
 }
 

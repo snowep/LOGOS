@@ -1,78 +1,94 @@
-# LOGOS — Hermes Agent Directive: P0.4.1 Vault Sync Hardening
+# LOGOS — Hermes Agent Corrective Directive
+# P0.4.1 Vault Sync Hardening — Final Integrity Pass
 
 ## Mission
 
-Take the existing `p0.4-vault-sync` implementation and make it reliable enough to serve as the real Markdown synchronization foundation for LOGOS.
-
-Do not add P0.5 Context Engine features.
-
-Do not invent project/agent/council functionality that belongs to later phases.
-
-Do not preserve broken code merely because it already exists.
-
-Branch:
+Take the current branch:
 
 ```text
 p0.4.1-vault-sync-hardening
 ```
 
-Base:
+and finish the vault synchronization layer so that the filesystem, SQLite state, event history, actor identity, and browser synchronization semantics agree.
+
+Do not start P0.5 Context Engine work.
+
+Do not invent P1.0 projects, P0.8 agents, or P0.9 councils.
+
+Do not preserve broken code merely because it already exists.
+
+---
+
+# 1. Core invariants
+
+These rules are non-negotiable:
+
+1. Markdown files are real files on disk.
+2. SQLite is canonical runtime state for document identity/history, not a substitute for the file itself.
+3. A successful document write must change the real file and verify its final hash.
+4. A stale expected version/hash returns `409` and causes no mutation.
+5. A missing live file for an active document is a conflict for update operations.
+6. A create operation never overwrites an existing file.
+7. A confirmed deletion creates a tombstone; it never destroys document history.
+8. Rename/move preserves the original document ID only when evidence is unambiguous.
+9. Duplicate-content files remain distinct unless identity evidence proves they are the same document.
+10. Repeated path+hash watcher notifications are no-ops.
+11. Writer identity comes from server-side actor context.
+12. SSE producer and consumer event names must match exactly.
+13. Browser UI never claims an action is implemented when it is not.
+14. No production UI uses fabricated data.
+
+---
+
+# 2. Refactor document service into the authoritative mutation path
+
+File:
 
 ```text
-p0.4-vault-sync
+apps/api/src/services/documentService.ts
 ```
 
----
+The document service must own create/update/delete semantics.
 
-## Non-negotiable truths
+## 2.1 Create
 
-1. SQLite stores runtime state; Markdown files remain real files in the configured vault.
-2. A successful LOGOS write must change the real file.
-3. A write is not successful until the resulting file hash has been verified.
-4. A rename/move is only a rename/move when identity evidence supports it.
-5. A deletion is not confirmed until the pending rename window expires.
-6. A conflict must return `409` and must not partially mutate state.
-7. Document history must survive deletion.
-8. Writer identity must come from server-side execution context.
-9. Browser UI must not fabricate projects, statuses, metrics, or actions.
-10. P0.4 must not start P0.5 until the acceptance matrix passes.
+Required order:
 
----
-
-# Part A — Document service
-
-## Create
-
-Implement:
-
-```ts
-createDocument()
+```text
+validate relative path
+ -> validate supported extension
+ -> validate ignore policy
+ -> validate UTF-8 byte size <= max
+ -> check active document by path
+ -> check filesystem path
+ -> reject existing path/file without mutation
+ -> atomic file write
+ -> re-read/hash final file
+ -> create or explicitly restore identity
+ -> transactionally insert document + created event
+ -> broadcast event
+ -> return verified state
 ```
 
-Behavior:
+Separate create input from update input. Do not require fake expected version/hash values for a true create.
 
-1. Validate the relative path.
-2. Confirm `.md` or `.markdown` extension.
-3. Reject ignored locations.
-4. Enforce the 10 MB limit.
-5. Check for an existing document at that path.
-6. Write the real file atomically.
-7. Read/hash the resulting file.
-8. Create a stable UUID document record.
-9. Record one `created` document event.
-10. Return the verified document state.
+If a tombstoned identity exists at the same path, choose one explicit policy:
 
-A create request must not require fake expected version/hash values when the file does not exist.
-
-## Update
-
-Implement:
-
-```ts
-updateDocument()
+```text
+restore same identity
 ```
 
-Inputs:
+or
+
+```text
+reject and require explicit restore
+```
+
+Do not silently create a second identity.
+
+## 2.2 Update
+
+Input:
 
 ```text
 id
@@ -82,295 +98,238 @@ expectedHash
 actor
 ```
 
-Order:
+Required order:
 
 ```text
-load document
- -> verify expected DB version/hash
- -> resolve safe filesystem path
- -> hash/check current file state
+load active document
+ -> verify DB expectedVersion
+ -> verify DB expectedHash
+ -> resolve safe path
+ -> require file exists
+ -> hash current file
+ -> compare current file hash to expectedHash
  -> if mismatch: 409, no mutation
- -> atomically write file
- -> re-read and hash final file
- -> update DB version
- -> record modified event
+ -> atomic write
+ -> re-read/hash final file
+ -> DB transaction: version + event
+ -> broadcast
  -> return verified state
 ```
 
-Version increments exactly once for a real content change.
+Do not accept a missing file as an implicit opportunity to recreate it.
 
-If the incoming hash equals the current hash, do not create a new version.
+Version increments exactly once for a real hash change.
 
-## Delete
+Same hash is a no-op.
 
-Implement:
+## 2.3 Delete
 
-```ts
-deleteDocument()
-```
-
-Require expected version/hash.
-
-Order:
+Input:
 
 ```text
-load document
- -> verify expected state
- -> atomically remove file
- -> mark document deleted
- -> record deleted event
+id
+expectedVersion
+expectedHash
+actor
+```
+
+Required order:
+
+```text
+load active document
+ -> verify DB expectedVersion/hash
+ -> require current file and current hash to match expected state
+ -> perform reversible/atomic delete strategy
+ -> verify file is absent
+ -> DB transaction: deleted_at + deleted event
+ -> broadcast
+ -> finalize filesystem removal if using trash staging
 ```
 
 Do not hard-delete the document row.
 
 ---
 
-# Part B — Document state model
+# 3. Transaction and recovery boundary
 
-Change the document model to support tombstones.
-
-Preferred shape:
+Use SQLite transactions for:
 
 ```text
-documents
-- id
-- path
-- current_hash
-- version
-- created_at
-- updated_at
-- deleted_at nullable
-- last_writer
-- size
-- mime_type
+document row update
++
+document event insert
 ```
 
-Document events must remain queryable after deletion.
+Do not allow a success response when the file and DB disagree.
 
-Remove `ON DELETE CASCADE` from document event history.
+When a filesystem action succeeds but the database transaction fails, attempt an explicit recovery action and surface failure.
 
-Do not destroy history to make the current-state table smaller.
+For delete, a staging/trash approach is preferred over immediate irreversible unlink.
 
 ---
 
-# Part C — Filesystem safety
+# 4. Centralize document eligibility
 
-Keep one canonical safe-path implementation.
+Create or extend one authoritative validator for:
 
-Required properties:
+```text
+.md
+.markdown
+10 MB maximum by bytes
+ignored temp files
+ignored backups
+ignored logs
+ignored databases
+ignored node_modules
+safe relative path
+```
 
-- reject POSIX absolute paths,
-- reject Windows drive paths,
-- reject UNC paths,
-- reject `../` and `..\\`,
-- reject symlink/junction escapes,
-- prove containment before creating parent directories,
-- normalize separators consistently,
-- never trust a browser-supplied absolute path.
+The document service, watcher, and reconciliation must use the same rules.
 
-The API must resolve paths from the configured vault root.
-
-Do not allow `DB_PATH` or another environment variable to silently move the canonical database outside the expected LOGOS runtime layout unless that override is explicitly documented and intended.
+A public API request must not be able to create `foo.txt` or an oversized UTF-8 file merely because a watcher would ignore it later.
 
 ---
 
-# Part D — Watcher
+# 5. Fix watcher state semantics
 
-Refactor `apps/api/src/services/watcher.ts` into a deterministic state machine.
-
-## Events
-
-Handle only:
+File:
 
 ```text
-add
-change
-unlink
+apps/api/src/services/watcher.ts
 ```
-
-for supported Markdown files.
 
 ## Add/change
 
-1. verify file exists,
-2. verify size,
-3. read content,
-4. calculate hash,
-5. identify actor if this was a LOGOS/agent/automation operation,
-6. compare with known document state,
-7. no-op when hash is unchanged,
-8. otherwise update state and record one event.
+```text
+stat
+ -> size check
+ -> read
+ -> hash
+ -> actor resolution
+ -> compare current state
+ -> no-op if same hash
+ -> mutate document state once
+ -> record one event
+ -> publish one event
+```
 
 ## Unlink
 
-Do not immediately emit `deleted`.
-
-Store:
-
 ```text
-pendingDeleteId
-path
-hash
-seenAt
+store pendingDelete
+ -> do not emit delete yet
+ -> wait bounded window
+ -> matching add?
+      yes -> rename/move and clear both states
+      no  -> tombstone + deleted event + clear state
 ```
 
-Then wait the bounded rename window.
+## Rename/move
 
-If a matching add appears:
+Requirements:
+
+- same directory => `renamed`
+- different directory => `moved`
+- same document ID preserved
+- `previous_path` stored
+- no transient `deleted` event
+- no stale path state left behind
+
+Do not match a tombstoned candidate as an active rename identity.
+
+## Actor recognition
+
+Remove the incorrect unconditional `registerLogosWrite()` behavior from HTTP routes.
+
+Use an internal operation record/token such as:
 
 ```text
-same directory -> renamed
-new directory  -> moved
+operationId
+documentId
+oldPath
+newPath
+expectedHash
+actor
+createdAt
 ```
 
-Update the existing document ID.
+Only internal LOGOS/AGENT/AUTOMATION operations should be registered as such.
 
-Record one event.
-
-If no match appears after the window:
-
-```text
-deleted
-```
-
-Record and publish the confirmed deletion.
-
-Clear pending state after resolution.
-
-## Repeated watcher events
-
-A repeated event with the same path + hash is not a new modification.
-
-Do not increment document version for duplicate events.
-
-## Lifecycle
-
-`startWatcher()` must not create multiple live watchers.
-
-`stopWatcher()` must:
-
-- close the watcher,
-- clear timers,
-- clear pending rename/delete state,
-- clear operation-registration state.
+A public HTTP request is `USER`.
 
 ---
 
-# Part E — Reconciliation
+# 6. Fix reconciliation
 
-Refactor `apps/api/src/services/reconcile.ts`.
+File:
+
+```text
+apps/api/src/services/reconcile.ts
+```
 
 ## Full reconcile
 
-The full vault is the comparison scope.
+Operate across the entire vault.
 
 ## Scoped reconcile
 
-If a relative subpath is supplied:
+If `syncPath` is provided:
 
 ```text
-compare only that subtree
+only compare paths inside that subtree
 ```
 
-Never delete/mark missing documents outside the subtree.
+Never mutate siblings outside the subtree.
 
-## Eligibility
+## Deletion
 
-Use the exact same eligibility rules as the watcher:
+Never use:
 
-- `.md`
-- `.markdown`
-- ignore node_modules,
-- ignore dotfiles/directories that are not part of the supported vault model,
-- ignore temp files,
-- ignore backups,
-- ignore logs,
-- ignore databases,
-- enforce max file size.
+```sql
+DELETE FROM documents
+```
 
-## Idempotence
+for normal vault reconciliation.
 
-No changes:
+Use tombstones.
+
+## Rename/move
+
+Candidates must be active, uniquely identifiable, and not contradicted by another live path.
+
+Identical-content duplicates remain independent documents.
+
+## Errors
+
+Read/stat/permission errors:
 
 ```text
-created 0
-updated 0
-deleted 0
-renamed 0
-conflicts 0
+skipped / partial / failed
 ```
 
-Running the same reconcile twice must not create a second modification event.
-
-## Rename detection
-
-Do not use a single global `getDocumentByHash()` result as sufficient evidence.
-
-Correct approach:
+Never:
 
 ```text
-candidate file has no row at current path
- -> identify missing prior document candidate(s)
- -> require unique identity evidence
- -> if exactly one valid candidate: rename/move
- -> otherwise: create new document
+read error -> delete document
 ```
 
-Identical-content duplicates must remain distinct documents.
-
-## Error handling
-
-Do not convert permission/read/stat errors into deletion.
-
-Return an explicit failed/partial reconciliation result when the scan cannot be trusted.
+The reconcile result must distinguish a trustworthy clean scan from a partial scan.
 
 ---
 
-# Part F — Concurrency
+# 7. Fix internal service API placement
 
-Define one canonical compare-and-swap rule.
-
-A write request is based on:
+Do not define document-service APIs in:
 
 ```text
-expectedVersion
-expectedHash
+apps/api/src/routes/documents.ts
 ```
 
-The server must verify both against the current state before mutating the file.
+Routes translate HTTP requests into service calls.
 
-On mismatch:
+Internal calls belong under `services/`.
 
-```http
-409 Conflict
-```
-
-Response should include:
-
-```text
-currentVersion
-currentHash
-expectedVersion
-expectedHash
-```
-
-No file mutation.
-
-No DB mutation.
-
-No event.
-
-Add a test that proves the conflict remains safe even when the live file changes between the initial read and the attempted write.
-
----
-
-# Part G — Writer identity
-
-Remove writer authority from public JSON bodies.
-
-The server creates the actor context.
-
-Use:
+Create a canonical actor context type there:
 
 ```text
 USER
@@ -379,174 +338,197 @@ AGENT
 AUTOMATION
 ```
 
-as internal actor values.
-
-A public HTTP body may request an operation, but cannot self-declare its identity.
+The internal update helper must use a real document ID or a real path-resolution function. Never pass `id: ''` as an implicit lookup mechanism.
 
 ---
 
-# Part H — SSE
+# 8. Fix request validation
 
-Keep event payloads lightweight.
-
-Required payload:
-
-```json
-{
-  "documentId": "...",
-  "event": "modified",
-  "path": "projects/drop-002.md",
-  "version": 8,
-  "hash": "...",
-  "writer": "USER"
-}
-```
-
-Do not put full Markdown content into SSE.
-
-Implement browser consumption:
+Use shared Zod schemas for:
 
 ```text
-EventSource('/api/vault/events')
- -> connection state
- -> event handler
- -> invalidate/refetch documents
+document UUID
+create input
+update input
+delete input
+reconcile input
 ```
 
-Use the browser's EventSource reconnect behavior rather than implementing a second custom transport.
+Delete expected state must be validated through middleware, not `parseInt()` and raw strings in the route handler.
 
 ---
 
-# Part I — API boundary
+# 9. Fix SSE contract
 
-Keep the Express architecture simple:
+Choose one canonical reconciliation event name:
 
 ```text
-server
- -> middleware
- -> routes
- -> document/vault service
- -> repositories/db
+reconcile-complete
 ```
 
-Do not have routes perform raw SQL for core document workflows.
+Use the same string in:
 
-Move document mutations into a service layer.
+```text
+backend broadcast
+shared contract
+browser EventSource listener
+UI handler
+```
 
-Keep repositories focused on persistence.
+Browser flow:
+
+```text
+SSE event
+ -> invalidate/refetch relevant data
+ -> render current API state
+```
+
+The EventSource connection must not reconnect merely because normal React component state changes.
+
+Use stable callbacks or refs.
+
+Keep payloads metadata-only.
 
 ---
 
-# Part J — Security boundary
+# 10. API security boundary
 
-Default the API to local-only operation.
+File:
+
+```text
+apps/api/src/server.ts
+```
+
+Default remains:
+
+```text
+HOST=127.0.0.1
+```
+
+Do not leave:
+
+```text
+CORS origin = *
+```
+
+as the production default.
+
+Use a configured origin or another explicit local security boundary.
+
+Do not claim the API is safe for network exposure unless mutation routes are authenticated.
+
+The existing API-key middleware must either be integrated for direct API access or explicitly documented as future-only while the server is local-only.
+
+---
+
+# 11. Fix the shared filesystem implementation
+
+There must be one canonical safe path implementation.
+
+Do not keep both:
+
+```text
+apps/api/src/fs/safePath.ts
+packages/core/src/filesystem.ts
+```
+
+with materially different security properties.
 
 Use:
 
 ```text
-HOST=127.0.0.1
+normalize
+ -> reject absolute paths
+ -> reject traversal
+ -> resolve against root
+ -> path.relative containment check
+ -> realpath/junction protection
+ -> only then create parent directories
 ```
 
-unless the user explicitly configures a different bind address.
-
-Do not leave wildcard CORS as the unqualified production default.
-
-If direct API exposure is supported, require authentication for mutations.
-
-The available API-key middleware must either be integrated or explicitly scoped as future-only with the API bound to localhost.
+Add tests for POSIX, Windows, UNC, traversal, junction/symlink escape, and the root sibling-prefix edge case.
 
 ---
 
-# Part K — Configuration cleanup
+# 12. Fix document identity helpers
 
-Replace machine-specific example values.
+`getOrCreateDocumentIdentity()` must be idempotent.
 
-`.env.example` should contain:
+Rule:
 
 ```text
-LOGOS_HOME=~/.logos
-LOGOS_WORKSPACE_ROOT=
-LOGOS_API_URL=http://127.0.0.1:3001
-PORT=3001
-HOST=127.0.0.1
+same path + same hash
+ -> same document
+ -> same version
+ -> no new event
 ```
 
-Do not put:
+A helper named `getOrCreate...` must not manufacture a new semantic modification every time it is called.
+
+---
+
+# 13. Add real integration tests
+
+Do not rely on the old `writeDocument()` tests.
+
+Test the actual new path:
 
 ```text
-D:\Project\...
+createDocument
+updateDocument
+deleteDocument
+watcher
+reconcile
 ```
 
-into product UI or canonical source configuration examples.
+Use temporary directories and temporary SQLite databases.
 
-Remove `NEXT_PUBLIC_API_URL` unless the browser genuinely requires it.
-
-Prefer same-origin browser requests through Next route handlers.
-
-Replace hardcoded `localhost:3001` rewrites with server configuration or remove unnecessary rewrites.
+For the live-file race test, introduce a deterministic barrier/hook in test mode rather than depending on timing luck.
 
 ---
 
-# Part L — Remove stale competing architecture
+# 14. Required exact integration cases
 
-Before finishing the branch:
-
-- remove unused Prisma configuration/dependencies,
-- consolidate duplicate Zod schemas,
-- remove or replace the weaker `packages/core/src/filesystem.ts`,
-- align `packages/contracts` with the real P0.4 event schema,
-- remove obsolete ORION/JARVIS references,
-- update phase metadata to reflect P0.4.1.
-
-Do not leave obsolete abstractions active merely because they compile.
-
----
-
-# Part M — Required regression tests
-
-Add integration coverage for:
+Implement tests for all items in:
 
 ```text
-create markdown
-modify markdown
-unchanged markdown no-op
-delete markdown
-rename markdown
-move markdown
-ambiguous identical-content duplicate
-rapid repeated edits
-ignore non-markdown
-ignore .bak
-ignore .db
-ignore node_modules
-reject >10MB
-LOGOS write reaches filesystem
-AGENT write reaches filesystem
-AUTOMATION write reaches filesystem
-stale expected version -> 409
-wrong expected hash -> 409
-file changed during write -> 409
-scoped reconcile does not touch sibling folders
-full reconcile idempotence
-reconcile rename
-reconcile duplicate-content create
-reconcile read error does not delete document
-SSE connect
-SSE event
-SSE close/reconnect
-API restart
-API start from another cwd
+02_ACCEPTANCE_TEST_MATRIX.md
 ```
 
-Use temporary fixture directories and databases.
-
-Do not place test files in the real product vault.
+A phase is not complete until all cases pass.
 
 ---
 
-# Part N — Verification
+# 15. UI corrections
 
-Run:
+Follow:
+
+```text
+03_UI_CORRECTIVE_DIRECTIVE.md
+```
+
+Do not add future roadmap functionality merely to make screens look populated.
+
+---
+
+# 16. Repository cleanup
+
+Before declaring completion:
+
+- update phase metadata to P0.4.1,
+- remove machine-specific environment examples,
+- align shared event contracts,
+- remove duplicate filesystem security code,
+- normalize web dependency versions,
+- restore/retain canonical project direction documents,
+- remove stale ORION/JARVIS product references where appropriate,
+- do not use fake production fallback data.
+
+---
+
+# 17. Verification
+
+Run these in the actual branch:
 
 ```text
 npm ci
@@ -556,9 +538,9 @@ npm run build
 npm test
 ```
 
-Also run the manual acceptance matrix in `02_ACCEPTANCE_TEST_MATRIX.md`.
+Also run the complete manual matrix.
 
-Do not state "all gates pass" unless the commands were actually run in this branch.
+Do not write "all gates pass" unless the commands were actually executed in this branch.
 
 ---
 
@@ -577,4 +559,4 @@ RISKS:
 NEXT ACTION:
 ```
 
-Do not hide unresolved risks.
+If any Severity 1 item remains, return `BLOCKED`.

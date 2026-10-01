@@ -62,6 +62,50 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
     fs.mkdirSync(dir, { recursive: true });
   }
 
+  // Check if active document already exists at this path
+  const existingDoc = getDocumentByPath(docPath);
+  if (existingDoc && existingDoc.deleted_at === null) {
+    throw createConflictError({
+      ...existingDoc,
+      current_hash: hash,
+      version: existingDoc.version,
+    }, 0, '');
+  }
+
+  // Check if filesystem file already exists
+  if (fs.existsSync(fullPath)) {
+    // Read existing file to check if it's the same content
+    const existingContent = fs.readFileSync(fullPath, 'utf8');
+    const existingHash = computeContentHash(existingContent);
+    if (existingHash === hash) {
+      // Same content exists - could be a tombstone restore scenario
+      // For now, reject to be safe - explicit restore can be added later
+      throw createConflictError({
+        id: '',
+        path: docPath,
+        current_hash: existingHash,
+        version: 0,
+        created_at: 0,
+        updated_at: 0,
+        deleted_at: null,
+        last_writer: 'USER',
+        size: Buffer.byteLength(existingContent, 'utf8'),
+      }, 0, '');
+    }
+    // Different content exists - reject to avoid overwriting user files
+    throw createConflictError({
+      id: '',
+      path: docPath,
+      current_hash: existingHash,
+      version: 0,
+      created_at: 0,
+      updated_at: 0,
+      deleted_at: null,
+      last_writer: 'USER',
+      size: Buffer.byteLength(existingContent, 'utf8'),
+    }, 0, '');
+  }
+
   // Atomic write: write to temp file then rename
   const tempPath = `${fullPath}.tmp.${process.pid}.${Date.now()}`;
   fs.writeFileSync(tempPath, content, 'utf8');
@@ -124,6 +168,11 @@ export function updateDocument(options: UpdateDocumentOptions): DocumentOperatio
     throw new Error('Document not found');
   }
 
+  // Verify document is not deleted
+  if (doc.deleted_at !== null) {
+    throw new Error('Cannot update deleted document');
+  }
+
   // Verify version matches
   if (doc.version !== expectedVersion) {
     throw createConflictError(doc, expectedVersion, expectedHash);
@@ -134,14 +183,16 @@ export function updateDocument(options: UpdateDocumentOptions): DocumentOperatio
     throw createConflictError(doc, expectedVersion, expectedHash);
   }
 
-  // Verify filesystem state matches DB
+  // Verify filesystem state matches DB - file MUST exist and hash MUST match
   const fullPath = resolveSafePath(config.vaultPath, doc.path);
-  if (fs.existsSync(fullPath)) {
-    const fileContent = fs.readFileSync(fullPath, 'utf8');
-    const fileHash = computeContentHash(fileContent);
-    if (fileHash !== doc.current_hash) {
-      throw createConflictError(doc, expectedVersion, expectedHash);
-    }
+  if (!fs.existsSync(fullPath)) {
+    throw createConflictError(doc, expectedVersion, expectedHash);
+  }
+  
+  const fileContent = fs.readFileSync(fullPath, 'utf8');
+  const fileHash = computeContentHash(fileContent);
+  if (fileHash !== doc.current_hash) {
+    throw createConflictError(doc, expectedVersion, expectedHash);
   }
 
   const newHash = computeContentHash(content);

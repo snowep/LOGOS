@@ -1,52 +1,50 @@
-# LOGOS — P0.4 Vault Sync Audit & Hermes Corrective Pack
+# LOGOS — P0.4.1 Vault Sync Hardening Audit Pack
 
-This pack evaluates branch `p0.4-vault-sync` at commit `e0ae32a2981f57ddf59da25e9f6975226be57cb3`.
-
-## Decision
-
-**DO NOT treat P0.4 as complete.**
-
-Create:
+Audited branch:
 
 ```text
 p0.4.1-vault-sync-hardening
+commit 2763109c530d9c4e53047e78c03c71151451ef08
 ```
 
-Complete the corrective work in this pack before starting P0.5 Context Engine.
+## Decision
 
-## Why
+**DO NOT advance to P0.5 yet.**
 
-The branch contains real improvements:
+The branch is materially improved over `p0.4-vault-sync` and fixes several previous blockers, but the vault synchronization core still has correctness problems that can leave filesystem state and database state inconsistent.
 
-- runtime SQLite artifacts are ignored rather than committed,
-- `LOGOS_HOME` is now the normal storage root,
-- document IDs are generated as UUIDs rather than path hashes,
-- rename/move detection exists,
-- writer identity exists,
-- conflict responses return HTTP 409,
-- reconciliation exists,
-- SSE exists,
-- Zod validation exists,
-- filesystem safety tests exist,
-- the procedural embedding interpolation regression is covered.
+The most important remaining failures are:
 
-However, several implementation details are still unsafe or incorrect for a real personal vault.
+- watcher deletion does not update the document tombstone,
+- reconciliation still physically deletes document rows instead of preserving tombstones,
+- create can overwrite an existing filesystem file before the database insert is known to be safe,
+- update does not treat a missing live file as a conflict,
+- writer registration incorrectly marks HTTP user writes as LOGOS writes,
+- the claimed internal writer helper is broken,
+- SSE event names do not match between reconciliation and the browser hook,
+- the Vault page still nests `Shell`,
+- Memory/Settings/System UI still contain non-production behavior,
+- existing tests do not exercise the new document service and watcher end-to-end,
+- no GitHub Actions workflow/status independently verifies the commit.
 
-The most important failure is this:
+## Recommended sequence
 
-> `POST /api/documents` and `PUT /api/documents/:id` call `writeDocument()`, but `writeDocument()` only updates SQLite state. It does not write the requested Markdown content to the filesystem.
+```text
+p0.4.1-vault-sync-hardening
+        |
+        +--> corrective commits on this branch
+        |
+        +--> acceptance matrix passes
+        |
+        +--> P0.5 Context Engine
+```
 
-Therefore the advertised LOGOS write flow is not implemented end-to-end.
+If a clean phase boundary is preferred, create `p0.4.2-vault-sync-integrity` from this commit and apply the same corrective directive there.
 
-## Required sequence
+## Files
 
-1. Read `00_CURRENT_BRANCH_AUDIT.md`.
-2. Read `01_HERMES_CORRECTIVE_DIRECTIVE.md`.
-3. Read `02_ACCEPTANCE_TEST_MATRIX.md`.
-4. Read `03_UI_CORRECTIVE_DIRECTIVE.md`.
-5. Create `p0.4.1-vault-sync-hardening` from `p0.4-vault-sync`.
-6. Fix backend correctness and security first.
-7. Add integration tests before calling the implementation complete.
-8. Apply the UI corrections without inventing P1.0 entities.
-9. Run the complete verification gate.
-10. Only after all acceptance tests pass, continue to `p0.5-context-engine`.
+- `00_CURRENT_BRANCH_AUDIT.md` — detailed findings and evidence
+- `01_HERMES_CORRECTIVE_DIRECTIVE.md` — implementation instructions
+- `02_ACCEPTANCE_TEST_MATRIX.md` — required tests
+- `03_UI_CORRECTIVE_DIRECTIVE.md` — UI cleanup needed before phase completion
+- `04_GENIE_INSPIRED_LOGOS_UI_BRIEF.md` — detailed LOGOS UI adaptation brief based on the supplied Genie reference

@@ -111,38 +111,38 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
 
     const existingDoc = getDocumentByPath(relPath);
 
-    if (!existingDoc) {
-      // Check if this file's hash matches an existing document (rename/move)
-      // BUT require unique identity: hash must map to exactly ONE document in DB
-      const docsByHash = db.prepare('SELECT * FROM documents WHERE current_hash = ?').all(contentHash) as any[];
+        if (!existingDoc) {
+          // Check if this file's hash matches an existing ACTIVE document (rename/move)
+          // BUT require unique identity: hash must map to exactly ONE ACTIVE document in DB
+          const docsByHash = db.prepare('SELECT * FROM documents WHERE current_hash = ? AND deleted_at IS NULL').all(contentHash) as any[];
       
-      if (docsByHash.length === 1) {
-        // Unique match - this is a rename/move
-        const docByHash = docsByHash[0];
-        const previousPath = docByHash.path;
+          if (docsByHash.length === 1) {
+            // Unique match - this is a rename/move
+            const docByHash = docsByHash[0];
+            const previousPath = docByHash.path;
         
-        // Only count as rename if the old path is NOT in our current scan
-        // (i.e., file moved from outside subtree to inside, or within subtree)
-        if (!seenPaths.has(previousPath)) {
-          const now = Date.now();
-          db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relPath, now, docByHash.id);
-          recordDocumentEvent(docByHash.id, 'renamed', relPath, docByHash.version, contentHash, 'USER', previousPath, { size: fileStats.size });
-          renamed++;
+            // Only count as rename if the old path is NOT in our current scan
+            // (i.e., file moved from outside subtree to inside, or within subtree)
+            if (!seenPaths.has(previousPath)) {
+              const now = Date.now();
+              db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relPath, now, docByHash.id);
+              recordDocumentEvent(docByHash.id, 'renamed', relPath, docByHash.version, contentHash, 'USER', previousPath, { size: fileStats.size });
+              renamed++;
+              continue;
+            }
+          }
+      
+          // No existing doc, or hash collision, or old path still in subtree - create new
+          const doc = getOrCreateDocumentIdentity(relPath, content, 'USER');
+          recordDocumentEvent(doc.id, 'created', relPath, 1, contentHash, 'USER', undefined, { size: fileStats.size });
+          created++;
           continue;
         }
-      }
 
-      // No existing doc, or hash collision, or old path still in subtree - create new
-      const doc = getOrCreateDocumentIdentity(relPath, content, 'USER');
-      recordDocumentEvent(doc.id, 'created', relPath, 1, contentHash, 'USER', undefined, { size: fileStats.size });
-      created++;
-      continue;
-    }
-
-    if (existingDoc.current_hash === contentHash) {
-      skipped++;
-      continue;
-    }
+        if (existingDoc.current_hash === contentHash) {
+          skipped++;
+          continue;
+        }
 
     // Conflict detection: file changed on disk. Check the most recent
     // document event — if the DB already recorded the file's new hash under a
@@ -171,7 +171,7 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
   // Only delete documents that were in the SUBTREE and not seen
   // This prevents sibling deletions outside the reconciliation scope
   const subtreePrefix = syncPath ? syncPath.replace(/\\/g, '/') + '/' : '';
-  const docsInSubtree = db.prepare('SELECT * FROM documents WHERE path LIKE ?').all(subtreePrefix + '%') as any[];
+  const docsInSubtree = db.prepare('SELECT * FROM documents WHERE path LIKE ? AND deleted_at IS NULL').all(subtreePrefix + '%') as any[];
 
   for (const doc of docsInSubtree) {
     if (!seenPaths.has(doc.path)) {
@@ -182,9 +182,10 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
         // File exists but wasn't in scan - shouldn't happen, skip
         continue;
       } catch {
-        // File genuinely gone - delete
+        // File genuinely gone - tombstone
+        const now = Date.now();
+        db.prepare('UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, doc.id);
         recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, 'USER');
-        db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
         deleted++;
       }
     }

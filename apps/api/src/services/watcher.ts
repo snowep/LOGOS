@@ -62,7 +62,11 @@ function checkEligible(relativePath: string, stats?: Stats): boolean {
   return isEligiblePath(relativePath, stats);
 }
 
-function emitDeleted(documentId: string, relativePath: string, version: number, hash: string, writer: WriterIdentity): void {
+function tombstoneDocument(documentId: string, relativePath: string, version: number, hash: string, writer: WriterIdentity): void {
+  const now = Date.now();
+  // Update document tombstone
+  db.prepare('UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, documentId);
+  
   recordDocumentEvent(documentId, 'deleted', relativePath, version, hash, writer);
   broadcastEvent('file-change', {
     event: 'deleted',
@@ -240,6 +244,7 @@ export function startWatcher(): FSWatcher {
                 emitMoved(otherState.documentId, otherState.path, relativePath, oldDoc.version, contentHash, writer, stats!);
               }
               
+              // Clean up old pending state
               pathStates.delete(otherPath);
               break;
             }
@@ -247,8 +252,8 @@ export function startWatcher(): FSWatcher {
         }
 
         if (matchedRename || matchedMove) {
-          // Mark this path as the new location
-          pathStates.set(relativePath, { status: 'pending_rename', oldPath: matchedPath, documentId: matchedDoc!.id, hash: contentHash, timestamp: Date.now() });
+          // Mark this path as the new location - but clear pending_rename after a brief moment
+          // Actually, rename is complete - don't leave pending state
           return;
         }
 
@@ -306,11 +311,11 @@ export function startWatcher(): FSWatcher {
             }
 
             if (!hasMatchingAdd) {
-              // No match - emit deleted
+              // No match - emit deleted (with tombstone)
               const doc = getDocumentIdentity(state.documentId);
               const docVersion = doc?.version ?? 1;
               const writer = determineWriter(relativePath, state.hash);
-              emitDeleted(state.documentId, relativePath, docVersion, state.hash, writer);
+              tombstoneDocument(state.documentId, relativePath, docVersion, state.hash, writer);
               pathStates.delete(relativePath);
             }
             // If hasMatchingAdd, the add handler will process it
