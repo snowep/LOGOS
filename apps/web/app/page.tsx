@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { apiBase } from "@/server/apiBase";
 
 export const metadata: Metadata = {
   title: "LOGOS — Personal AI Assistant",
@@ -25,7 +26,7 @@ interface ActivityItem {
 
 async function fetchHomeData() {
   try {
-    const projectsRes = await fetch("http://localhost:3001/api/documents?limit=10", {
+    const projectsRes = await fetch(`${apiBase()}/api/documents?limit=10`, {
       next: { revalidate: 30 },
     });
     const projectsData = await projectsRes.json();
@@ -40,7 +41,7 @@ async function fetchHomeData() {
       status: "active" as const,
     }));
 
-    const eventsRes = await fetch("http://localhost:3001/api/memory/promote/events?limit=20", {
+    const eventsRes = await fetch(`${apiBase()}/api/memory/promote/events?limit=20`, {
       next: { revalidate: 30 },
     });
     const eventsData = await eventsRes.json();

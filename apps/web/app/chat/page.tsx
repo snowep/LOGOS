@@ -33,7 +33,7 @@ import {
   Info,
 } from '@mui/icons-material';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 interface Message {
   id: string;
@@ -114,49 +114,7 @@ export default function ChatPage() {
         setContextData(data);
       } catch (error) {
         console.error('Error fetching context:', error);
-        // Use mock data for development
-        setContextData({
-          project: {
-            name: 'LOGOS',
-            description: 'Logical Orchestration Governing Operational Systems',
-            lastUpdated: new Date(),
-          },
-          relatedNotes: [
-            {
-              id: 'note1',
-              title: 'Phase G4 Planning',
-              snippet: 'Outline for chat page implementation with context selector and source transparency.',
-              timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-            },
-          ],
-          councilSessions: [
-            {
-              id: 'session1',
-              topic: 'Architecture Review',
-              participants: ['Alice', 'Bob', 'Charlie'],
-              timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000),
-              outcome: 'Approved migration to SQLite',
-            },
-          ],
-          decisions: [
-            {
-              id: 'dec1',
-              title: 'Adopt MUI v9',
-              description: 'Standardize on MUI v9 for all UI components',
-              timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-              status: 'approved',
-            },
-          ],
-          memories: [
-            {
-              id: 'mem1',
-              type: 'episodic',
-              content: 'User discussed project timeline during standup',
-              timestamp: new Date(Date.now() - 30 * 60 * 1000),
-              relevance: 0.9,
-            },
-          ],
-        });
+        setContextData(null);
       } finally {
         setLoadingContext(false);
       }

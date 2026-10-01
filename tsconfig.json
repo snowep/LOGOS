@@ -1,18 +1,18 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    "module": "Node16",
     "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": [],
-  "exclude": ["node_modules", "dist", "**/dist", "apps/*/dist", "packages/*/dist", "apps/*/node_modules", "packages/*/node_modules"]
+  "include": ["apps/api/**/*", "packages/**/*"],
+  "exclude": ["node_modules", "dist", "**/dist", "apps/*/dist", "packages/*/dist", "apps/*/node_modules", "packages/*/node_modules", "apps/web/**/*"]
 }

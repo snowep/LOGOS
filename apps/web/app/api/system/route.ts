@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiBase } from "@/server/apiBase";
 
 export async function GET(request: NextRequest) {
   try {
-    const response = await fetch("http://localhost:3001/api/system", {
+    const response = await fetch(`${apiBase()}/api/system`, {
       headers: {
         "Content-Type": "application/json",
       },

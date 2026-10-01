@@ -1,26 +1,44 @@
 import path from 'path';
 
+function getLogosHome(): string {
+  const envHome = process.env.LOGOS_HOME;
+  if (envHome) {
+    return envHome.startsWith('~') 
+      ? path.join(process.env.HOME || process.env.USERPROFILE || '', envHome.slice(1))
+      : envHome;
+  }
+  // Default: ~/.logos
+  return path.join(process.env.HOME || process.env.USERPROFILE || '', '.logos');
+}
+
+function getWorkspaceRoot(): string {
+  const envRoot = process.env.LOGOS_WORKSPACE_ROOT;
+  if (envRoot) return envRoot;
+  // Default: LOGOS_HOME/workspace/vault
+  return path.join(getLogosHome(), 'workspace', 'vault');
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
-  vaultPath: process.env.VAULT_PATH || path.resolve(__dirname, '../../../storage/workspace/vault'),
-  dbPath: process.env.DB_PATH || path.resolve(__dirname, '../../storage/system/logos.db'),
+  vaultPath: getWorkspaceRoot(),
+  dbPath: process.env.DB_PATH || path.join(getLogosHome(), 'system', 'logos.db'),
   cors: {
     origin: process.env.CORS_ORIGIN || '*',
-    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'] as string[],
+    allowedHeaders: ['Content-Type', 'Authorization'] as string[],
   },
   rateLimit: {
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 minutes
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
     max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
   },
   sse: {
     heartbeatInterval: parseInt(process.env.SSE_HEARTBEAT_INTERVAL || '30000', 10),
   },
   logosWriteCleanup: parseInt(process.env.LOGOS_WRITE_CLEANUP_MS || '5000', 10),
-  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10), // 10MB
-  version: '0.3.0',
+  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10),
+  version: '0.3.1',
   name: 'logos',
-  activePhase: 'P0.3',
+  activePhase: 'P0.3.1',
 } as const;
 
 export type Config = typeof config;

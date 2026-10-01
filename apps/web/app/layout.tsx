@@ -1,4 +1,5 @@
 import React from 'react';
+import { ThemeRegistry } from '@/theme/ThemeRegistry';
 import Shell from './components/Shell';
 
 export const metadata = {
@@ -12,9 +13,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body style={{ margin: 0, padding: 0, backgroundColor: '#0a0a0a' }}>
-        <Shell>{children}</Shell>
+    <html lang="en" suppressHydrationWarning>
+      <body style={{ margin: 0, padding: 0 }}>
+        <ThemeRegistry>
+          <Shell>{children}</Shell>
+        </ThemeRegistry>
       </body>
     </html>
   );

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiBase } from "@/server/apiBase";
 
 export async function GET(request: NextRequest) {
   try {
-    const response = await fetch("http://localhost:3001/events/vault", {
+    const response = await fetch(`${apiBase()}/events/vault`, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

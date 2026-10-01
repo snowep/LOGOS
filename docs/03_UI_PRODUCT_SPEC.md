@@ -1,936 +1,633 @@
-# LOGOS — UI Product Specification
+# LOGOS — UI Product Specification v1
 
-## Product Identity
+## Product feeling
 
-LOGOS should feel:
+LOGOS must feel:
 
-> **welcoming, warm, informative, dark, minimal, and capable.**
+- welcoming
+- warm
+- informative
+- calm
+- capable
+- dark by default
+- minimal
+- personal
 
-The user explicitly prefers:
+It must not feel like an admin dashboard, monitoring console, generic SaaS app, neon HUD, or developer console on Home.
 
-- minimal Apple-like visual restraint;
-- dark theme;
-- compact icon sidebar that expands;
-- chat context panel only when relevant;
-- a custom work model combining projects, tasks, decisions, memory, and activity;
-- Vault focused on meaningful `.md` knowledge files;
-- highly transparent memory;
-- people-like identities with clear operational roles for agents/councils;
-- technical internals available under System;
-- balanced information density;
-- almost no animation.
+Core sentence:
 
-Brand colors will be supplied later.
+> LOGOS is a quiet personal command center that understands what matters.
 
-Until then, define semantic color tokens rather than locking the interface to arbitrary colors.
+## MUI
 
----
+Use Material UI v9 and official `@mui/icons-material`. MUI v9 is the current stable major version. MUI documents official SVG icon components and accessibility patterns for icon buttons. See the project references in the audit response.
 
-## 1. Core UI Principle
-
-Normal UI answers:
-
-> **What matters?**
-
-Advanced UI answers:
-
-> **How does the system work?**
-
-The interface must progressively expose complexity.
-
-Normal level:
+Use official components such as:
 
 ```text
-What do you need?
+Box
+Stack
+Container
+Paper
+Card
+CardContent
+Typography
+Button
+IconButton
+TextField
+List
+ListItem
+Divider
+Chip
+Alert
+Drawer
+AppBar
+Toolbar
+Tabs
+Dialog
+Menu
+Tooltip
+Avatar
+CircularProgress
+LinearProgress
 ```
 
-Context level:
+Do not build custom replacements for standard MUI controls.
 
-```text
-What is LOGOS doing?
-```
-
-Evidence level:
-
-```text
-What information is LOGOS using?
-```
-
-Technical level:
-
-```text
-How did the system execute it?
-```
-
----
-
-## 2. Global Shell
+## Global layout
 
 Desktop:
 
 ```text
-┌──────┬─────────────────────────────────────────────┐
-│      │                                             │
-│ NAV  │                 CONTENT                     │
-│      │                                             │
-└──────┴─────────────────────────────────────────────┘
+collapsed rail: 64 px
+expanded rail: 248 px
+top bar: 56 px
+content max width: 1120 px
+page padding: 32 px
+section gap: 32 px
+card gap: 16 px
 ```
 
-Collapsed navigation:
+Tablet:
 
 ```text
-64 px
+padding: 24 px
+navigation: rail or drawer
 ```
 
-Expanded navigation:
+Mobile:
 
 ```text
-240–256 px
+drawer navigation
+padding: 16 px
+top bar: 56 px
 ```
 
-The navigation begins collapsed on desktop and expands explicitly.
+## Typography
 
-Mobile uses a drawer.
-
----
-
-## 3. Navigation
+Use one font family:
 
 ```text
-LOGOS
-
-Home
-Chat
-Work
-Vault
-Memory
-People
-Automations
-
-────────────
-
-Settings
-System
+Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif
 ```
 
-The navigation is visually quiet.
+Sizes:
 
-Current location must be obvious without being loud.
+```text
+body1       16 / 1.6
+body2       14 / 1.5
+caption     12 / 1.4
+overline    11 / 1.3
 
----
+page h1     32 / 1.2 / 600
+page h2     28 / 1.25 / 600
+h3          20 / 1.3 / 600
+section     18 / 1.35 / 600
+card title  16 / 1.4 / 600
+```
 
-## 4. Top Bar
+Never use 48–64 px page headings.
 
-Height target:
+The current Home header is too large.
+
+## Icons
+
+Use only official MUI icons.
+
+```text
+navigation: 22–24 px
+normal: 20–24 px
+button icon: 20 px
+metadata: 18 px
+empty state: <=32 px
+```
+
+Every icon-only interactive control needs `aria-label`.
+
+Do not add an icon to every card.
+
+Do not use decorative rockets/robots/analytics/terminal icons merely to fill space.
+
+Remove the current Home microphone control. LOGOS is text-first.
+
+## Buttons
+
+Primary:
+
+```text
+contained
+height: 40 px
+font size: 14 px
+padding: 16 px horizontal
+disableElevation: true
+```
+
+Secondary:
+
+```text
+outlined
+height: 40 px
+```
+
+Low emphasis:
+
+```text
+text
+```
+
+## Cards
+
+Do not use statistic cards at the top of Home.
+
+Home project cards:
+
+```text
+desktop width: 352–360 px
+min height: 156 px
+padding: 20 px
+radius: 12 px
+gap: 16 px
+```
+
+Three cards:
+
+```text
+352 + 16 + 352 + 16 + 352 = 1088 px
+```
+
+fits inside 1120 px.
+
+At medium widths: 2 columns.
+
+At mobile: 1 column, width 100%.
+
+## Color system
+
+Brand colors are not final yet. Use semantic tokens so the brand palette can be replaced later.
+
+Temporary warm accent only:
+
+```text
+accent.main  #B87945
+accent.light #D3A67B
+accent.dark  #8C5630
+```
+
+### Dark theme
+
+```text
+background.default #0F0E0D
+background.paper   #171514
+surface.elevated   #1D1B19
+divider            #34302C
+
+text.primary       #F4F0EA
+text.secondary     #B8B1A8
+text.disabled      #746E68
+
+success #6FBF8A
+warning #D6A85E
+error   #D97878
+info    #7FA7C7
+```
+
+### Light theme
+
+```text
+background.default #F5F2ED
+background.paper   #FFFDF9
+surface.elevated   #FFFFFF
+divider            #DDD7CF
+
+text.primary       #211E1B
+text.secondary     #655F59
+text.disabled      #9B948C
+
+success #3F7D55
+warning #916D2D
+error   #A64B4B
+info    #4E6F8D
+```
+
+Do not use pure black/white for large surfaces.
+
+Do not use low-opacity gray text for important information.
+
+Do not use opacity 0.2 on semantic text/icons.
+
+## Theme architecture
+
+Create:
+
+```text
+apps/web/src/theme/tokens.ts
+apps/web/src/theme/theme.ts
+apps/web/src/theme/ThemeRegistry.tsx
+```
+
+One global ThemeProvider owns the theme.
+
+Do not let Home manage its own theme.
+
+Dark is default. Light is fully designed, not just an inverted background.
+
+## Home
+
+Purpose:
+
+> What are we working on?
+
+Order:
+
+```text
+Greeting
+Command input
+Continue Working
+Needs Attention
+Recent
+```
+
+Content width:
+
+```text
+1120 px
+```
+
+Greeting:
+
+```text
+32 px / 600
+```
+
+Second line:
+
+```text
+20 px / 400
+```
+
+Command box:
+
+```text
+max width: 760 px
+min height: 104 px
+```
+
+Placeholder:
+
+> Continue a project, ask a question, or tell LOGOS what to do…
+
+Use real data or an honest empty state.
+
+Remove:
+- mockStats
+- mockProjects
+- fake activity
+- fake progress
+- system-status chip
+- large rocket icon
+- gradient title
+- microphone/voice UI
+- mock quick-action cards
+
+## Continue Working
+
+Maximum three project cards above the fold.
+
+Each card displays exactly:
+
+```text
+project name
+short description
+last meaningful activity
+next action
+```
+
+Example:
+
+```text
+DROP 002
+Brand project
+
+Council discussion about scarcity
+Next: Review decision
+```
+
+No fake progress percentage.
+
+## Needs Attention
+
+Only render when real items exist.
+
+Compact row/card:
+
+```text
+title
+one-sentence explanation
+one action
+```
+
+Example:
+
+```text
+DROP 002
+A council decision has not been applied to the project notes.
+
+Review
+```
+
+Do not use giant filled Alert banners for ordinary attention items.
+
+## Recent
+
+Maximum 8 Home items.
+
+Each row:
+
+```text
+18 px icon
+description
+secondary context
+time
+```
+
+Row height:
 
 ```text
 56–64 px
 ```
 
-Show page/context and a small LOGOS readiness indicator.
+## Chat
 
-Do not show raw:
+Conversation is dominant.
 
-- CPU
-- RAM
-- latency
-- throughput
-- active streams
-- embedding model
-- filesystem paths
-- API port
-
-Those belong under System.
-
----
-
-# HOME
-
-## 5. Home Purpose
-
-Home answers:
-
-> **What should I do next?**
-
-It should not be a system dashboard.
-
----
-
-## 6. Home Opening
-
-Preferred opening:
+Chat content:
 
 ```text
-Good morning.
-
-What are we working on?
+max width: 840 px
 ```
 
-The greeting may vary naturally.
-
-Immediately below it is one dominant command box.
+Composer:
 
 ```text
-┌───────────────────────────────────────────────────────┐
-│ Continue a project, ask a question, or tell LOGOS    │
-│ what to do...                                         │
-│                                                   ↑   │
-└───────────────────────────────────────────────────────┘
+min height: 56 px
+max height: 180 px
 ```
 
-Examples:
+Context appears only when useful.
+
+A context drawer may show:
 
 ```text
-Continue DROP 002.
-```
-
-```text
-What did we decide about scarcity?
-```
-
-```text
-Start the strategy council.
-```
-
----
-
-## 7. Continue Working
-
-Show a small number of active projects.
-
-Each item should answer:
-
-- what is this?
-- where did we leave it?
-- what happens next?
-
-Example:
-
-```text
-DROP 002
-Brand project
-
-Last activity
-Council discussion about scarcity
-
-Next
-Review decision
-```
-
-Do not overload project cards with statistics.
-
----
-
-## 8. Needs Attention
-
-Only show when useful.
-
-Example:
-
-```text
-Needs your attention
-
-DROP 002
-A council decision has not yet been applied
- to the project notes.
-
-Review →
-```
-
-This is one of LOGOS's important proactive surfaces.
-
----
-
-## 9. Recent
-
-Use human-readable activity:
-
-```text
-Today
-
-09:12   DROP 002 updated
-08:44   Council meeting completed
-08:31   Research note added
-```
-
-Do not surface raw event names in Home.
-
----
-
-# CHAT
-
-## 10. Chat Layout
-
-Chat is the main working interface.
-
-```text
-┌───────────────────────────────────────────────────────┐
-│ Chat                                  DROP 002  ▾     │
-├───────────────────────────────────────────────────────┤
-│                                                       │
-│ conversation                                          │
-│                                                       │
-├───────────────────────────────────────────────────────┤
-│ Ask LOGOS...                                  Send ↑ │
-└───────────────────────────────────────────────────────┘
-```
-
----
-
-## 11. Context Panel
-
-The context panel appears only when relevant.
-
-Example:
-
-```text
-Context
-
-DROP 002
-
-3 related notes
-1 council session
-2 decisions
-4 memories
-
-View sources →
-```
-
-Do not permanently display context machinery.
-
----
-
-## 12. Source Transparency
-
-Normal response:
-
-> I found three related notes and the last council discussion.
-
-On demand, show:
-
-```text
-Sources
-3 documents
+3 sources
 1 council session
 4 memories
-
-Reason
-Matched project + topic + recent decision
 ```
 
----
-
-## 13. Approval UI
-
-Consequential actions must present a meaningful proposal.
-
-Example:
+Consequential actions use an explicit approval surface:
 
 ```text
 LOGOS proposes
 
-Update:
+Files:
 DROP 002.md
 scarcity.md
 
 Changes:
-• Change release quantity
-• Add council conclusion
-• Preserve previous decision in history
+...
 
 Review changes
-
 Approve
 Cancel
 ```
 
-Avoid generic “Are you sure?” dialogs when the system can describe the real change.
+## Work
 
----
+Work is a custom LOGOS workspace, not a copy of another productivity app.
 
-# WORK
-
-## 14. Work Model
-
-Work is not a copy of Notion, Linear, or a kanban dashboard.
-
-It is a connected LOGOS project model:
+Project sections:
 
 ```text
-Project
-├── Overview
-├── Tasks
-├── Decisions
-├── Documents
-├── Memory
-├── People
-├── Councils
-└── Activity
-```
-
----
-
-## 15. Project Screen
-
-Example:
-
-```text
-DROP 002
-
-Brand project
-Active
-
-Overview  Tasks  Decisions  Documents
-Memory  People  Councils  Activity
-```
-
-Main content should emphasize:
-
-- current focus
-- next actions
-- important decisions
-- open questions
-- recent activity
-
----
-
-# VAULT
-
-## 16. Vault Definition
-
-The Vault UI is **not an Obsidian replacement**.
-
-It surfaces the meaningful Markdown knowledge layer.
-
-Focus on corresponding `.md` files that save important information such as:
-
-- councils
-- memory
-- projects
-- decisions
-- research
-- people
-- documentation
-
-Do not make the user browse arbitrary filesystem internals by default.
-
----
-
-## 17. Vault Layout
-
-```text
-┌──────────────┬────────────────────┬─────────────────────────┐
-│ KNOWLEDGE    │ DOCUMENTS          │ PREVIEW                 │
-│              │                    │                         │
-│ Projects     │ DROP 002.md        │ # DROP 002              │
-│ Councils     │ scarcity.md        │                         │
-│ Memory       │ council-04.md      │ Scarcity is the core... │
-│ People       │ brand.md           │                         │
-│ Decisions    │                    │                         │
-└──────────────┴────────────────────┴─────────────────────────┘
-```
-
----
-
-## 18. Vault Relationships
-
-A document should show meaningful relationships:
-
-```text
-DROP 002.md
-
-Related
-
-Project
-DROP 002
-
+Overview
+Tasks
 Decisions
-Scarcity is the core
-
-Council
-Brand Council — Session 04
-
+Documents
 Memory
-Production quantity
-
 People
-Brand Manager
-Research Manager
+Councils
+Activity
 ```
 
-This is what makes LOGOS more than a file browser.
+A project connects these objects.
 
----
+## Vault
 
-## 19. Vault Actions
+Vault is not a generic filesystem browser.
 
-Contextual actions can include:
+Only meaningful Markdown knowledge is surfaced.
 
-- Ask LOGOS
-- Edit
-- Rename
-- Move
-- Archive
-- Show related
-- Find conflicts
-- Update using LOGOS
-
-Destructive actions require explicit confirmation/authorization.
-
----
-
-# MEMORY
-
-## 20. Memory Screen
-
-Primary heading:
-
-> **What does LOGOS remember?**
-
-Search:
+Categories:
 
 ```text
-Search what LOGOS remembers...
+Projects
+Knowledge
+Memory
+Councils
+People
+Decisions
+Research
+Documents
 ```
 
-Human-facing categories may include:
-
-- Recent
-- About you
-- Projects
-- Decisions
-- Knowledge
-- Ways of working
-
-Underlying memory types such as episodic/semantic/procedural/working may be exposed in advanced detail rather than becoming the user's main mental model.
-
----
-
-## 21. Memory Detail
-
-Example:
+Desktop layout:
 
 ```text
-Scarcity is a core principle of DROP 002.
-
-Source
-Brand Council — Session 04
-
-Related
-DROP 002
-scarcity.md
-
-Confidence
-High
-
-Created
-Sep 29, 2026
-
-Status
-Durable
+left: 200 px
+middle: 320 px
+right: remaining
 ```
 
-Provenance must be inspectable.
+Right preview minimum:
 
----
+```text
+420 px
+```
 
-# PEOPLE
+Show relationships such as:
 
-## 22. People Screen
+```text
+Project
+Decision
+Council
+Memory
+People
+```
 
-Show:
+Hide raw Windows paths by default.
+
+## Memory
+
+Question:
+
+> What does LOGOS remember?
+
+Display:
+- search,
+- recent memories,
+- project memories,
+- decisions,
+- personal context,
+- knowledge.
+
+Advanced details:
+- source,
+- confidence,
+- created,
+- updated,
+- status,
+- related documents,
+- related project.
+
+## People
+
+Groups:
 
 ```text
 You
-
 LOGOS
-
 Agents
 Personas
 Councils
 ```
 
-Agents and councils should feel like identities while remaining clearly operational.
-
----
-
-## 23. Agent Detail
-
-Example:
+Agent cards:
 
 ```text
-Research Manager
-
-Research & validation
-
-Status
-Available
-
-Responsibilities
-Research
-Source checking
-Evidence collection
-
-Permissions
-Read: Research/
-Write: Research/Drafts/
-Cannot: Delete canonical files
+name
+purpose
+status
+scope
 ```
 
----
+Never display invented activity.
 
-# COUNCILS
+## Councils
 
-## 24. Council Screen
-
-A council is a structured reasoning room.
-
-Example:
+Council page:
 
 ```text
-Brand Council
-
-Purpose
-Challenge brand decisions.
-
-Members
-● Member A
-● Member B
-● Member C
-● Member D
-
-Current Session
-Scarcity
+purpose
+roster
+current session
+past sessions
+decisions
 ```
 
-Do not turn councils into theatrical character UI.
-
----
-
-## 25. Council Session
+Session page:
 
 ```text
-Brand Council
-Session 04
-
-Topic
-Scarcity
-
-Participants
-4
-
-Discussion
-...
-
-Arguments
-...
-
-Disagreements
-...
-
-Evidence
-...
-
-Synthesis
-...
-
-Decision
-...
-
-Actions
-...
+topic
+participants
+arguments
+disagreements
+evidence
+synthesis
+decision
+actions
 ```
 
-Disagreement must be preserved rather than visually hidden in favor of forced consensus.
+## Automations
 
----
-
-# AUTOMATIONS
-
-## 26. Automation Screen
-
-Example:
+Show:
 
 ```text
-Automations
-
-Daily project review
-Every day · 09:00
-● Active
-
-When DROP 002 changes
-Review project consistency
-● Active
-
-Weekly vault review
-Sunday · 18:00
-○ Paused
+name
+trigger
+schedule
+status
+last run
+next run
 ```
 
-Automation details expose:
+Do not list integrations that do not exist.
 
-- trigger
-- scope
-- actions
-- permissions
-- last run
-- result
-- failures
+## System
 
----
-
-# SYSTEM
-
-## 27. System Screen
-
-This is where the current developer dashboard information belongs.
-
-Sections:
-
-```text
-System
-├── Health
-├── Storage
-├── Retrieval
-├── Events
-├── Runtime
-├── Logs
-├── Configuration
-└── Developer
-```
-
-Here it is appropriate to expose:
-
-- API health
-- SQLite
-- sqlite-vec
-- watcher
-- SSE
-- model provider
-- embedding model
-- memory counts
-- event counts
-- runtime metrics
-- logs
-- development phase information
-
-Only show values backed by real runtime state.
-
----
-
-# SETTINGS
-
-## 28. Settings
-
-User-facing settings:
-
-- appearance
-- notifications
-- language
-- workspace
-- permissions
-- memory behavior
-- automation
-- integrations
-
-Technical environment configuration may be exposed under advanced/developer settings where appropriate.
-
----
-
-# VISUAL LANGUAGE
-
-## 29. Theme
-
-Dark theme is mandatory for this direction.
-
-Use a dark background that is comfortable for long sessions.
-
-Do not default to pure black with neon highlights.
-
-Do not use futuristic glowing HUD styling.
-
----
-
-## 30. Brand Colors
-
-Brand colors are intentionally not frozen yet.
-
-Use semantic tokens:
-
-```text
-background
-surface
-surfaceElevated
-border
-textPrimary
-textSecondary
-accent
-success
-warning
-error
-info
-```
-
-Brand identity will later map onto these tokens.
-
----
-
-## 31. Typography
-
-Typography carries hierarchy.
-
-```text
-Page title
-    ↓
-Section title
-    ↓
-Primary information
-    ↓
-Supporting information
-    ↓
-Metadata
-```
-
-Do not use oversized decorative headings.
-
----
-
-## 32. Surfaces
-
-Use official MUI components.
-
-Prefer restrained combinations of:
-
-- Paper
-- Card
-- List
-- Drawer
-- Dialog
-- Popover
-- Menu
-- Tabs
-- Chip
-- Button
-- TextField
-
-Do not put every piece of content inside a card.
-
-A clean section with a heading and divider is often preferable.
-
----
-
-## 33. Radius and Elevation
-
-Use small/moderate corner radius and subtle elevation.
-
-Elevation communicates hierarchy.
-
-It is not decorative.
-
----
-
-## 34. Animation
-
-Animation is nearly absent.
+System is the technical dashboard.
 
 Allowed:
 
-- drawer transition
-- dialog transition
-- small hover state
-- progress/state indicator
-- message appearance
-
-Avoid:
-
-- animated backgrounds
-- floating UI
-- glowing AI brains
-- constant movement
-- animated gradients
-
----
-
-## 35. LOGOS Working State
-
-When performing work, LOGOS should communicate activity plainly.
-
-Example:
-
 ```text
-LOGOS is working…
-
-Finding the relevant project notes.
+API health
+database
+document index
+retrieval backend
+embedding backend
+SSE
+runtime
+logs
+configuration
+developer information
 ```
 
-Then:
+Still use MUI.
+
+## Settings
+
+User-facing:
 
 ```text
-LOGOS is working…
-
-Reviewing the council discussion.
+Appearance
+Workspace
+Memory
+Notifications
+Permissions
+Automations
+Integrations
 ```
 
-Then:
+Do not expose raw API URLs as the main settings experience.
 
-```text
-Ready
+## Responsive behavior
 
-I found the relevant information.
-```
+At <900 px:
+- navigation becomes a drawer,
+- project cards use 2 columns when possible,
+- context panel becomes a drawer,
+- vault preview can become a drawer/route.
 
-Do not use a theatrical “AI thinking” animation.
+At <600 px:
+- one column,
+- 16 px page padding,
+- full-width cards,
+- no horizontal page scrolling.
 
----
+## Core UI rule
 
-## 36. Error State
+Normal UI answers:
 
-Normal UI example:
+> What matters?
 
-```text
-LOGOS couldn't reach the vault.
+System UI answers:
 
-The vault watcher is offline.
-
-Retry
-Open System
-```
-
-Technical error details may be expanded.
-
-Never expose raw technical jargon as the only error message.
-
----
-
-## 37. The Old Dashboard
-
-The current developer dashboard is considered a prototype and should not be incrementally polished into the final Home page.
-
-Replace the old information hierarchy.
-
-Move developer information into System/Developer.
-
-Remove false or hard-coded metrics.
-
-Remove unsupported claims such as:
-
-- fake active subagent counts;
-- fake GitHub Projects integration status;
-- fake model readiness claims;
-- hard-coded telemetry;
-- fake roadmap completion.
-
----
-
-## 38. Final UX Test
-
-Ask these questions for every screen:
-
-1. Does this help the user understand what matters?
-2. Does it hide implementation details until useful?
-3. Does it make LOGOS's action understandable?
-4. Does it preserve transparency when the user wants it?
-5. Does it avoid pretending unsupported capabilities exist?
-6. Does it feel warm and welcoming while remaining serious?
-7. Does it work in a dark theme without excessive glow?
-8. Is the interface primarily composed of official MUI components?
+> How does the machine work?

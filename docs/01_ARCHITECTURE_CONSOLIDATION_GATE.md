@@ -1,416 +1,233 @@
-# LOGOS — Architecture Consolidation Gate Before P0.4
+# LOGOS — P0.3 Foundation Alignment Gate
 
-## Status
+## Branch
 
-**BLOCKING GATE**
+`p0.3.1-foundation-alignment`
 
-Substantial P0.4 work must not proceed until the issues in this document are resolved or explicitly documented as intentionally deferred with a safe reason.
+## Goal
 
----
+Make P0.3 a coherent foundation before P0.4 adds more synchronization behavior.
 
-## 1. Canonical Storage Architecture
+## 1. One database
 
-There must be one runtime database architecture.
-
-Preferred direction:
+Use exactly one runtime SQLite database:
 
 ```text
-LOGOS Runtime
-    |
-    +-- SQLite (`better-sqlite3`)
-    |
-    +-- sqlite-vec for vectors
-    |
-    +-- filesystem for Markdown/artifacts
+LOGOS_HOME/
+  system/
+    logos.db
+  workspace/
+    vault/
 ```
 
-Do not maintain all of these simultaneously as competing runtime authorities:
+`LOGOS_HOME` must be explicit configuration.
 
-- Prisma domain schema
-- standalone better-sqlite3 schema
-- JSON-backed `Map` implementation called `SimpleSqliteDatabase`
+Do not derive the database location from the current working directory or compiled source layout.
 
-### Required result
-
-Delete or retire the fake JSON database implementation in `packages/core/src/db.ts`.
-
-Do not describe JSON persistence as SQLite.
-
-If Prisma is not the runtime authority, remove the unused Prisma architecture rather than maintaining a misleading second domain model.
-
----
-
-## 2. Domain State Must Have One Owner
-
-System entities must eventually have one authoritative persistence model.
-
-The runtime architecture should be capable of representing, at minimum, coherent identifiers/relationships for:
-
-- projects
-- documents
-- tasks
-- decisions
-- memories
-- people/personas
-- agents/managers
-- councils
-- council sessions
-- events
-- permissions/approvals
-
-Do not define a large entity model in an unused schema and then implement a separate unrelated runtime schema.
-
----
-
-## 3. Document Identity
-
-Every important Markdown document must have a stable system identity independent of path.
-
-Minimum conceptual fields:
+Recommended backend structure:
 
 ```text
-document.id
-document.path
-document.current_hash
-document.version
-document.created_at
-document.updated_at
-document.last_writer
+apps/api/src/db/
+  client.ts
+  migrations/
+  repositories/
 ```
 
-This identity is required for:
+`index.ts` should be bootstrap/composition, not the home of every SQL query.
 
-- rename/move detection
-- history
-- conflict detection
-- relationships
-- provenance
-- memory references
+## 2. Remove runtime artifacts
 
-A path alone is not a sufficient identity.
-
----
-
-## 4. Writer Identity
-
-File operations must carry a source/writer identity.
-
-Minimum categories:
+Delete from Git:
 
 ```text
-USER
-LOGOS
-AGENT
-AUTOMATION
+*.db
+*.db-wal
+*.db-shm
 ```
 
-A richer identity can be layered above these categories.
+including the currently committed database files.
 
-This allows LOGOS to distinguish its own writes from external user changes and delegated agent changes.
+Keep runtime storage local.
 
----
+## 3. Document identity
 
-## 5. Safe File Writes
-
-A LOGOS write should be based on an expected document version/hash.
-
-Conceptual flow:
+Required document model:
 
 ```text
-read document
-    ↓
-remember expected base hash/version
-    ↓
-prepare change
-    ↓
-authorize
-    ↓
-verify current base still matches
-    ↓
-write atomically
-    ↓
-verify resulting file
+id             stable UUID
+path           current relative path
+current_hash   SHA-256
+version        monotonically increasing integer
+created_at
+updated_at
+last_writer
+size
+mime_type
 ```
 
-If the base changed unexpectedly, treat it as a real conflict.
+Path is mutable. ID is not.
 
----
+## 4. Write contract
 
-## 6. Conflict Detection
+A document write must support optimistic concurrency:
 
-The current concept of “two changes within one second” is not a sufficient conflict model.
+```json
+{
+  "path": "projects/drop-002.md",
+  "content": "...",
+  "expectedVersion": 7,
+  "expectedHash": "abc123",
+  "writer": "LOGOS"
+}
+```
 
-Do not define concurrent editing solely from elapsed time.
+If the current state is not v7/abc123, return a conflict instead of overwriting.
 
-Conflict should be based on state/version mismatch.
+## 5. Filesystem security
 
-Example:
+`resolveSafePath()` must:
+- reject absolute paths,
+- reject traversal,
+- use `path.relative()` containment,
+- verify real paths,
+- prevent symlink escape,
+- not create a parent directory before containment is established.
+
+Tests must cover:
 
 ```text
-LOGOS planned from hash A
-current file is still hash A
-→ safe to write
+../secret.md
+..\secret.md
+C:\secret.md
+\server\share\secret.md
+symlink-to-outside/file.md
 ```
 
-versus:
+## 6. Vector search
+
+The branch currently falls back to JavaScript cosine similarity.
+
+That is acceptable temporarily, but it must be explicit.
+
+Create a provider boundary such as:
 
 ```text
-LOGOS planned from hash A
-current file is now hash B
-→ conflict
+VectorSearchProvider
+  -> SqliteVecProvider
+  -> JavaScriptFallbackProvider
 ```
 
-Preserve conflict metadata so a human can understand what happened.
+The API must report which backend is actually active.
 
----
+Never claim sqlite-vec is active when it is not.
 
-## 7. Vault Watcher Scope
+## 7. Memory embedding
 
-Watcher behavior must be explicit.
+Verify all embedding inputs.
 
-At minimum:
-
-- watch intended Markdown files rather than arbitrary binary files;
-- ignore temporary/system files where appropriate;
-- enforce practical file-size safeguards;
-- normalize relative paths consistently;
-- handle create/change/delete;
-- model rename/move where possible;
-- avoid recursive event loops caused by LOGOS writing its own changes.
-
----
-
-## 8. Event vs Memory
-
-A filesystem event is not automatically a memory.
-
-Correct conceptual pipeline:
-
-```text
-filesystem event
-    ↓
-document event
-    ↓
-document index update
-    ↓
-optional diff
-    ↓
-meaning/importance evaluation
-    ↓
-possible memory promotion
-```
-
-Do not write the entire file into episodic memory every time the watcher sees a change.
-
-Autosaves and normal editing must not generate huge repeated memories.
-
----
-
-## 9. Vector Identity
-
-Do not use UUID strings as implicit integer sqlite-vec rowids.
-
-Use an explicit vector-key design that is compatible with sqlite-vec semantics, or maintain a robust mapping between application UUIDs and vector row identifiers.
-
-The application ID and vector-storage ID may be different, but the mapping must be deterministic and integrity-safe.
-
----
-
-## 10. Procedural Embedding Bug
-
-Fix the procedural-memory embedding source string.
-
-The current implementation escapes template interpolation, causing literal placeholder text instead of actual memory values.
-
-The embedding must be generated from the real content, conceptually:
+Procedural embedding input must actually interpolate:
 
 ```ts
-`${memory.name} ${memory.description || ''} ${memory.steps} ${memory.triggers || ''}`
+`${memory.name} ${memory.description ?? ""} ${memory.steps} ${memory.triggers ?? ""}`
 ```
 
----
+Add a regression test for this exact bug class.
 
-## 11. API Architecture
+## 8. Event vs memory
 
-There must be one real HTTP server architecture.
+Never automatically store the complete Markdown file as episodic memory for every edit.
 
-Do not keep:
-
-- Express routers that are never mounted;
-- a separate raw HTTP router duplicating endpoint logic.
-
-Prefer one server stack with mounted routes, middleware, validation, auth, and error handling in one coherent path.
-
----
-
-## 12. API Validation
-
-Request inputs must be validated and bounded.
-
-At minimum protect:
-
-- limits
-- thresholds
-- IDs
-- paths
-- request bodies
-- query parameters
-
-Reject invalid values instead of allowing `NaN`, negative limits, unbounded queries, or malformed paths into the core services.
-
-Use typed schemas where practical.
-
----
-
-## 13. Authentication and Authorization
-
-Auth code existing in a repository is not enough.
-
-The actual runtime request path must enforce the intended permissions.
-
-Important operations should have explicit authorization checks, especially:
-
-- file writes
-- deletes
-- external communications
-- sensitive data access
-- automation
-- agent actions
-- system modifications
-
-Follow the constitutional rule:
-
-> LOGOS proposes → user approves → LOGOS executes → LOGOS verifies.
-
-Do not let UI approval be the only place where this boundary exists.
-
----
-
-## 14. Filesystem Security
-
-The filesystem adapter must defend against:
-
-- `..` traversal
-- absolute-path bypasses
-- prefix-based containment bypasses
-- symlink escapes where applicable
-- unintended write locations
-
-Use robust `relative()`-based containment or equivalent rather than relying only on string prefix checks.
-
----
-
-## 15. SSE Correctness
-
-Client lifecycle must be correct.
-
-Do not attempt to delete a stored client from a `Set` by constructing a new object with the same fields.
-
-Store/retrieve the actual reference or use a `Map` keyed by client ID.
-
-SSE should communicate lightweight metadata, not complete document contents.
-
-Suggested payload:
+Required flow:
 
 ```text
-documentId
-path
-event
-version
-hash
-timestamp
-writer
+file change
+-> document event
+-> document index update
+-> optional diff
+-> memory evaluation
+-> promotion if justified
 ```
 
-The client can fetch document data when needed.
+## 9. API architecture
 
----
+Use one actual server.
 
-## 16. Manual Sync
-
-A control labelled `Sync Now` must perform actual synchronization/reconciliation.
-
-If the system cannot currently implement real manual reconciliation, remove the control instead of returning a false success state.
-
----
-
-## 17. Configuration
-
-Replace hard-coded paths and ports.
-
-No UI component should contain a machine-specific path such as:
+Preferred:
 
 ```text
-D:\Project\LOGOS\...
+Express
+ -> middleware
+ -> auth
+ -> routes
+ -> services
+ -> repositories
 ```
 
-The API and web application must use one coherent runtime configuration source.
+Do not keep an unused Express dependency beside a raw HTTP router.
 
-Avoid having multiple different default ports across components.
+## 10. Request validation
 
----
+Use Zod or equivalent validation for:
+- path parameters,
+- query limits,
+- thresholds,
+- body schemas,
+- writer identity,
+- pagination.
 
-## 18. ORION → LOGOS Rename
+Reject NaN, negative limits, huge limits, malformed IDs, invalid paths, and unknown writers.
 
-Complete the rename in:
+Do not expose raw internal exception messages.
 
-- environment variable names
-- documentation
-- UI labels
-- package metadata where appropriate
-- service names where appropriate
-- comments/instructions
+## 11. Configuration
 
-Do not leave the product internally calling itself ORION unless the reference is explicitly historical.
+Use:
 
----
+```text
+LOGOS_HOME
+LOGOS_WORKSPACE_ROOT
+LOGOS_API_URL
+LOGOS_MODEL_PROVIDER
+LOGOS_MODEL_BASE_URL
+LOGOS_MODEL_NAME
+PORT
+```
 
-## 19. Web Toolchain
+Keep any compatibility mapping temporary and documented.
 
-Normalize the web package.
+For Next.js, do not use a Vite-style `VITE_API_URL` unless intentionally required.
 
-The current package contains mismatched versions for Next.js, React types, and `eslint-config-next`.
+## 12. Cleanup
 
-Bring the versions into a coherent Next.js/React toolchain and use an appropriate modern lint command for the installed Next version.
+Remove:
+- committed database artifacts,
+- `apps/api/server.log`,
+- test files accidentally placed in the vault,
+- `.bak` source files,
+- stale ORION docs,
+- fake UI data,
+- dead code.
 
----
+## 13. Verification
 
-## 20. CI
-
-Add a CI workflow after consolidation.
-
-Minimum checks:
+Run:
 
 ```text
 npm ci
 npm run typecheck
 npm run lint
-npm run test
 npm run build
+npm test
 ```
 
-The development branch should not rely solely on local claims that all checks pass.
-
----
-
-## Exit Criteria
-
-The gate is passed only when:
-
-- one canonical DB architecture exists;
-- document identity/versioning exists;
-- writer identity exists;
-- conflict semantics are real;
-- watcher behavior is bounded;
-- vault events are not automatically durable memories;
-- vector IDs are correct;
-- procedural embeddings are correct;
-- one API server handles routes;
-- auth is enforced in the actual runtime path;
-- filesystem containment is robust;
-- SSE lifecycle is correct;
-- `Sync Now` is truthful;
-- configuration is centralized;
-- ORION references are cleaned up;
-- web dependencies are coherent;
-- CI verifies the repository.
+Then manually verify:
+- API starts from another cwd,
+- database is created in LOGOS_HOME,
+- Markdown watcher works,
+- non-Markdown files are ignored,
+- symlink escape is blocked,
+- LOGOS writes do not loop,
+- conflicts are detected,
+- deletion works,
+- rename/move behavior is deterministic,
+- no fake telemetry is shown.

@@ -214,9 +214,9 @@ export function updateSemanticAccess(id: string): void {
 // ===== PROCEDURAL MEMORY =====
 export async function writeProcedural(memory: Omit<ProceduralMemory, 'id' | 'embedding' | 'success_rate' | 'use_count' | 'created_at' | 'updated_at'>): Promise<string> {
   const id = uuidv4();
-  // Embed only the procedure steps (the actual workflow content) for semantic search
-  // Not name+description+triggers which are metadata
-  const embedding = await generateEmbedding(memory.steps);
+  // Embed the full procedural content for semantic search (regression test for interpolation bug)
+  const embeddingInput = `${memory.name} ${memory.description ?? ""} ${memory.steps} ${memory.triggers ?? ""}`;
+  const embedding = await generateEmbedding(embeddingInput);
   const timestamp = now();
 
   const stmt = db.prepare(`

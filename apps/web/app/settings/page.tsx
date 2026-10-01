@@ -612,8 +612,9 @@ export default function SettingsPage() {
                 </Typography>
                 <TextField
                   label="API URL"
-                  placeholder="http://localhost:3001"
-                  value="http://localhost:3001"
+                  value={process.env.NEXT_PUBLIC_API_URL ?? '/api (proxied)'}
+                  slotProps={{ input: { readOnly: true } }}
+                  helperText="Configured via LOGOS_API_URL on the server. Change it in System, not here."
                   sx={{ mb: 2 }}
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>

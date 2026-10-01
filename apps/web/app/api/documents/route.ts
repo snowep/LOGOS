@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiBase } from "@/server/apiBase";
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const queryString = searchParams.toString();
-    const url = `http://localhost:3001/api/documents${queryString ? '?' + queryString : ''}`;
+    const url = `${apiBase()}/api/documents${queryString ? '?' + queryString : ''}`;
     
     const response = await fetch(url, {
       headers: {

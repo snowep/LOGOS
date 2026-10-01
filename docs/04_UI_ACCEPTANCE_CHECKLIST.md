@@ -1,106 +1,112 @@
 # LOGOS — UI Acceptance Checklist
 
-Use this checklist before declaring the redesigned UI complete.
-
 ## Global
+- [ ] MUI v9 used consistently.
+- [ ] No fake production data.
+- [ ] No hard-coded Windows paths.
+- [ ] No browser hard-coded localhost API URLs.
+- [ ] No ORION visible in product UI.
+- [ ] No voice controls.
+- [ ] No fake telemetry.
+- [ ] No fake integrations.
+- [ ] No fake agent counts.
+- [ ] No fake progress.
 
-- [ ] The app is recognizably LOGOS, not ORION.
-- [ ] The theme is dark.
-- [ ] The visual tone is warm and welcoming without being decorative or childish.
-- [ ] The UI feels minimal and Apple-like in restraint.
-- [ ] The interface does not look like an enterprise monitoring dashboard.
-- [ ] There are no fake metrics.
-- [ ] There are no unsupported feature claims.
-- [ ] There are no hard-coded Windows paths in normal UI.
-- [ ] There are no hard-coded API URLs in UI components.
-- [ ] Brand colors are represented through semantic tokens so the final palette can be inserted later.
+## Typography
+- [ ] Home title 32 px.
+- [ ] Inner page titles <=28 px.
+- [ ] Section headings 18 px.
+- [ ] Card titles 16 px.
+- [ ] Body 14–16 px.
+- [ ] Metadata 12–13 px.
+- [ ] No clipped headings.
+- [ ] No unreadable secondary text.
 
-## Navigation
+## Icons
+- [ ] Official MUI icons only.
+- [ ] Navigation 22–24 px.
+- [ ] Normal 20–24 px.
+- [ ] Metadata 18 px.
+- [ ] Icon-only controls have aria-label.
+- [ ] No decorative icon overload.
+- [ ] No microphone button.
 
-- [ ] Sidebar starts collapsed on desktop.
-- [ ] Sidebar can expand.
-- [ ] Navigation labels are exactly understandable.
-- [ ] Current page is obvious.
-- [ ] Mobile navigation uses a drawer.
+## Dark
+- [ ] Warm dark background.
+- [ ] Readable primary text.
+- [ ] Readable secondary text.
+- [ ] Visible but subtle borders.
+- [ ] Accent used sparingly.
+- [ ] No purple/indigo gradient.
+
+## Light
+- [ ] Warm off-white background.
+- [ ] Near-white surfaces.
+- [ ] Dark readable text.
+- [ ] Visible borders.
+- [ ] Accent remains readable.
 
 ## Home
-
-- [ ] Greeting + “What are we working on?” is the primary opening.
-- [ ] Main command input is the dominant control.
-- [ ] Continue Working shows active projects.
-- [ ] Needs Attention appears only when relevant.
-- [ ] Recent activity is human-readable.
-- [ ] Development roadmap is not the main Home content.
-- [ ] Raw telemetry is absent from Home.
+- [ ] Greeting.
+- [ ] Dominant command input.
+- [ ] Command max width 760 px.
+- [ ] Content max width 1120 px.
+- [ ] Maximum three primary project cards above fold.
+- [ ] Project cards approximately 352–360 px wide desktop.
+- [ ] Needs Attention only when populated.
+- [ ] Recent activity is real.
+- [ ] No telemetry cards.
 
 ## Chat
-
-- [ ] Conversation is primary.
-- [ ] Context panel is hidden until useful.
-- [ ] Sources can be inspected.
-- [ ] Context is described in human language.
-- [ ] Consequential actions show meaningful proposed changes.
-- [ ] Approve/Cancel boundaries are clear.
-
-## Work
-
-- [ ] Projects are connected objects, not isolated cards.
-- [ ] Tasks, decisions, documents, memory, people, councils, and activity can connect to a project.
-- [ ] Important decisions are visible as first-class information.
+- [ ] Conversation dominates.
+- [ ] Context hidden until relevant.
+- [ ] Sources inspectable.
+- [ ] Consequential actions have approval UI.
 
 ## Vault
-
-- [ ] Vault is not a generic filesystem browser.
-- [ ] Important Markdown files are surfaced.
-- [ ] Relationships between documents and system objects are visible.
-- [ ] LOGOS actions are available contextually.
-- [ ] Destructive actions require appropriate authorization.
+- [ ] Only meaningful Markdown documents shown.
+- [ ] Relationships visible.
+- [ ] Preview readable.
+- [ ] Raw filesystem path hidden by default.
 
 ## Memory
-
-- [ ] The screen asks what LOGOS remembers rather than forcing database terminology.
-- [ ] Memory is highly inspectable.
-- [ ] Provenance is visible.
-- [ ] Confidence/status can be inspected.
-- [ ] Underlying memory types are available in advanced detail.
-
-## People / Agents / Councils
-
-- [ ] Agents feel like identities with clear operational responsibilities.
-- [ ] Permissions are inspectable.
-- [ ] Councils show their purpose and members.
-- [ ] Council sessions show arguments and disagreements, not only a final answer.
-
-## Automations
-
-- [ ] Trigger, scope, actions, permissions, and history are inspectable.
-- [ ] Automation state is based on real runtime data.
+- [ ] Search.
+- [ ] Provenance.
+- [ ] Confidence where applicable.
+- [ ] Status.
+- [ ] Related documents/projects.
 
 ## System
+- [ ] Real health data.
+- [ ] Real DB data.
+- [ ] Real retrieval backend.
+- [ ] Real runtime data.
+- [ ] Real logs.
+- [ ] Accurate configuration.
+- [ ] Developer information isolated here.
 
-- [ ] Technical metrics have moved here.
-- [ ] Runtime information is real, not invented.
-- [ ] Developer roadmap is here, not on Home.
-- [ ] Storage/retrieval/event information is available here.
+## Accessibility
+- [ ] Keyboard navigation.
+- [ ] Visible focus.
+- [ ] Icon labels.
+- [ ] Form labels.
+- [ ] Correct heading hierarchy.
+- [ ] Adequate contrast.
+- [ ] No information conveyed only by color.
 
-## MUI
+## Screen test sizes
 
-- [ ] Official MUI components are used wherever practical.
-- [ ] No unnecessary custom component framework has been created.
-- [ ] Components are used semantically rather than as decorative boxes.
+```text
+1440 x 900
+1280 x 800
+1024 x 768
+768 x 1024
+390 x 844
+```
 
-## Final Product Test
-
-A first-time user should be able to answer immediately:
-
-> What can I ask LOGOS to do?
-
-A returning user should be able to answer immediately:
-
-> What were we working on?
-
-A technical user should be able to answer, by opening System:
-
-> What is the system actually doing?
-
-If any of these three answers requires reading source code, the UI hierarchy is not finished.
+At all sizes:
+- [ ] no horizontal page overflow,
+- [ ] no clipped headings,
+- [ ] no unreadable text,
+- [ ] no overlapping controls,
+- [ ] primary action remains visible.

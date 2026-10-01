@@ -2,9 +2,10 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { config } from '../config';
 
-const DB_DIR = path.join(__dirname, '../../storage/system');
-const DB_PATH = path.join(DB_DIR, 'logos.db');
+const DB_DIR = path.dirname(config.dbPath);
+const DB_PATH = config.dbPath;
 
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
@@ -21,10 +22,10 @@ export type WriterIdentity = 'USER' | 'LOGOS' | 'AGENT' | 'AUTOMATION';
 
 // Document identity interface
 export interface DocumentIdentity {
-  id: string;
-  path: string;
-  current_hash: string;
-  version: number;
+  id: string;              // stable UUID
+  path: string;            // current relative path (mutable)
+  current_hash: string;    // SHA-256
+  version: number;         // monotonically increasing integer
   created_at: number;
   updated_at: number;
   last_writer: WriterIdentity;
@@ -103,9 +104,8 @@ export function initializeSchema() {
   }
   setSchemaVersion(CURRENT_SCHEMA_VERSION);
 
-  // Note: sqlite-vec native extension not available on Windows via npm
-  // Vector search will be done in JavaScript using cosine similarity
-  console.warn('sqlite-vec native extension not available, using JS-based vector search');
+  // Update the path for unlink events - we need to look up by document_id since path may have changed
+  // This is handled in the watcher by looking up the document by path before deletion
 
   // Episodic Memory (events, interactions)
   db.exec(`
@@ -258,7 +258,8 @@ export function computeContentHash(content: string): string {
 }
 
 export function generateDocumentId(path: string): string {
-  return crypto.createHash('sha256').update(path).digest('hex').substring(0, 16);
+  // Use crypto.randomUUID for stable UUID identity
+  return crypto.randomUUID();
 }
 
 export function getOrCreateDocumentIdentity(
@@ -266,13 +267,13 @@ export function getOrCreateDocumentIdentity(
   content: string,
   writer: WriterIdentity
 ): DocumentIdentity {
-  const docId = generateDocumentId(filePath);
   const hash = computeContentHash(content);
   const now = Date.now();
   const size = Buffer.byteLength(content, 'utf8');
-  
-  const existing = db.prepare('SELECT * FROM documents WHERE id = ?').get(docId) as DocumentIdentity | undefined;
-  
+
+  // Look up by path first (path is the mutable identifier)
+  const existing = db.prepare('SELECT * FROM documents WHERE path = ?').get(filePath) as DocumentIdentity | undefined;
+
   if (existing) {
     // Update existing document
     const updated: DocumentIdentity = {
@@ -287,10 +288,11 @@ export function getOrCreateDocumentIdentity(
     db.prepare(`
       UPDATE documents SET path = ?, current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
       WHERE id = ?
-    `).run(filePath, hash, updated.version, now, writer, size, docId);
+    `).run(filePath, hash, updated.version, now, writer, size, existing.id);
     return updated;
   } else {
-    // Create new document
+    // Create new document with stable UUID
+    const docId = generateDocumentId(filePath);
     const created: DocumentIdentity = {
       id: docId,
       path: filePath,
@@ -361,34 +363,100 @@ export function getAppIdByVectorRowid(vectorRowid: number, tableName: string): s
   return row?.app_id || null;
 }
 
-// Path safety utilities
-export function resolveSafePath(rootPath: string, relativePath: string): string {
-  const normalized = path.normalize(relativePath);
-  if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
-    throw new Error(`Path traversal attempt blocked: ${relativePath}`);
-  }
-  const resolved = path.resolve(rootPath, normalized);
-  
-  // Ensure the parent directory exists
-  const parentDir = path.dirname(resolved);
-  if (!fs.existsSync(parentDir)) {
-    fs.mkdirSync(parentDir, { recursive: true });
-  }
-  
-  // For realpathSync, we need the root to exist
-  const realRoot = fs.realpathSync(rootPath);
-  
-  // For the resolved path, we only need to check if the parent directory is within root
-  // Since we already created parentDir, we can use its realpath
-  const realParentDir = fs.realpathSync(parentDir);
-  if (!realParentDir.startsWith(realRoot)) {
-    throw new Error(`Path outside root blocked: ${relativePath}`);
-  }
-  return resolved;
-}
+// Path safety utilities (extracted to ../fs/safePath.ts; re-exported for compatibility)
+export { resolveSafePath } from '../fs/safePath';
 
 export function close() {
   db.close();
+}
+
+// Optimistic concurrency check for document writes
+export interface WriteDocumentOptions {
+  path: string;
+  content: string;
+  expectedVersion?: number;
+  expectedHash?: string;
+  writer: WriterIdentity;
+}
+
+export interface WriteDocumentResult {
+  document: DocumentIdentity;
+  conflict?: {
+    currentVersion: number;
+    currentHash: string;
+    expectedVersion: number;
+    expectedHash: string;
+  };
+}
+
+export function writeDocument(options: WriteDocumentOptions): WriteDocumentResult {
+  const { path: filePath, content, expectedVersion, expectedHash, writer } = options;
+  const hash = computeContentHash(content);
+  const now = Date.now();
+  const size = Buffer.byteLength(content, 'utf8');
+
+  // Check if document exists by path
+  const existing = db.prepare('SELECT * FROM documents WHERE path = ?').get(filePath) as DocumentIdentity | undefined;
+
+  if (existing) {
+    // Check for conflict
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      return {
+        document: existing,
+        conflict: {
+          currentVersion: existing.version,
+          currentHash: existing.current_hash,
+          expectedVersion,
+          expectedHash: expectedHash || '',
+        },
+      };
+    }
+    if (expectedHash !== undefined && existing.current_hash !== expectedHash) {
+      return {
+        document: existing,
+        conflict: {
+          currentVersion: existing.version,
+          currentHash: existing.current_hash,
+          expectedVersion: expectedVersion || existing.version,
+          expectedHash,
+        },
+      };
+    }
+
+    // No conflict - update
+    const updated: DocumentIdentity = {
+      ...existing,
+      path: filePath,
+      current_hash: hash,
+      version: existing.version + 1,
+      updated_at: now,
+      last_writer: writer,
+      size,
+    };
+    db.prepare(`
+      UPDATE documents SET path = ?, current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
+      WHERE id = ?
+    `).run(filePath, hash, updated.version, now, writer, size, existing.id);
+    return { document: updated };
+  } else {
+    // Create new document with stable UUID
+    const docId = generateDocumentId(filePath);
+    const created: DocumentIdentity = {
+      id: docId,
+      path: filePath,
+      current_hash: hash,
+      version: 1,
+      created_at: now,
+      updated_at: now,
+      last_writer: writer,
+      size,
+    };
+    db.prepare(`
+      INSERT INTO documents (id, path, current_hash, version, created_at, updated_at, last_writer, size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(docId, filePath, hash, 1, now, now, writer, size);
+    return { document: created };
+  }
 }
 
 // Types (updated with writer_identity)

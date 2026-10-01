@@ -17,7 +17,6 @@ import {
   ListItemIcon,
   IconButton,
   Button,
-  Alert,
 } from "@mui/material";
 import {
   ArrowRight,
@@ -27,8 +26,6 @@ import {
   Warning,
   KeyboardArrowRight,
   Search,
-  Mic,
-  Send,
 } from "@mui/icons-material";
 import { useTheme, useMediaQuery } from "@mui/material";
 
@@ -70,11 +67,9 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const [command, setCommand] = useState("");
-  const [isListening, setIsListening] = useState(false);
   const [projects, setProjects] = useState<Project[]>(initialProjects);
   const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
   const [activities, setActivities] = useState<ActivityItem[]>(initialActivities);
-  const [loading, setLoading] = useState(false);
   const [greeting, setGreeting] = useState("");
 
   useEffect(() => {
@@ -112,10 +107,6 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
     window.location.href = `/chat?q=${encodeURIComponent(command.trim())}`;
   };
 
-  const handleVoiceInput = () => {
-    setIsListening(!isListening);
-  };
-
   const formatTimeAgo = (dateStr: string): string => {
     const now = new Date();
     const date = new Date(dateStr);
@@ -136,64 +127,52 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  if (loading && projects.length === 0 && activities.length === 0) {
-    return (
-      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 2 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Box sx={{ width: 24, height: 24, borderRadius: "50%", border: "3px solid", borderColor: "primary.main transparent transparent transparent", animation: "spin 1s linear infinite" }} />
-          <Typography variant="body1" color="text.secondary">Loading...</Typography>
-        </Box>
-      </Box>
-    );
-  }
-
   return (
-    <Box sx={{ maxWidth: 900, mx: "auto", width: "100%", px: isMobile ? 2 : 0, py: 4, fontFamily: geistFont }}>
-      <Paper elevation={0} variant="outlined" sx={{ mb: 4, p: { xs: 3, sm: 4 }, borderColor: "divider" }}>
+    <Box sx={{ maxWidth: 1120, mx: "auto", width: "100%", px: isMobile ? 2 : 4, py: 4 }}>
+      <Box sx={{ mb: 4 }}>
         <Stack spacing={2.5} direction="column" sx={{ alignItems: "stretch" }}>
-          <Typography variant="h2" sx={{ fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.2, color: "text.primary" }}>
+          <Typography variant="h1" sx={{ fontSize: 32, fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.2, color: "text.primary" }}>
             {greeting}.
           </Typography>
-          <Typography variant="h4" sx={{ fontWeight: 400, letterSpacing: "-0.01em", lineHeight: 1.3, color: "text.primary" }}>
+          <Typography sx={{ fontSize: 20, fontWeight: 400, lineHeight: 1.3, color: "text.secondary" }}>
             What are we working on?
           </Typography>
-          <Box sx={{ mt: 1 }}>
-            <TextField
-              fullWidth
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="Continue a project, ask a question, or tell LOGOS what to do…"
-              variant="outlined"
-              size="small"
-              multiline
-              rows={2}
-              aria-label="Command input"
-              sx={{
-                "& .MuiInputBase-root": {
-                  fontSize: "1.125rem",
-                  fontWeight: 400,
-                  lineHeight: 1.6,
-                  color: "text.primary",
-                  "&::placeholder": { color: "text.disabled", opacity: 1 },
-                },
-                "& .MuiOutlinedInput-root": {
-                  "& fieldset": { borderColor: "divider" },
-                  "&:hover fieldset": { borderColor: "text.secondary" },
-                  "&.Mui-focused fieldset": { borderColor: "primary.main", borderWidth: 2 },
-                },
-              }}
-            />
-            <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 1 }}>
-              <IconButton size="small" onClick={handleVoiceInput} sx={{ color: isListening ? "primary.main" : "text.secondary", p: 0.5 }} aria-label={isListening ? "Stop voice input" : "Start voice input"}>
-                <Mic fontSize="medium" />
-              </IconButton>
-              <Button type="button" onClick={handleCommandSubmit} size="small" variant="contained" disabled={!command.trim()} startIcon={<ArrowRight fontSize="small" />} sx={{ textTransform: "none", fontWeight: 500, height: 36 }}>
-                Send
-              </Button>
-            </Box>
+          <Box sx={{ mt: 1, maxWidth: 760 }}>
+            <form onSubmit={handleCommandSubmit}>
+              <TextField
+                fullWidth
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="Continue a project, ask a question, or tell LOGOS what to do…"
+                variant="outlined"
+                size="small"
+                multiline
+                rows={2}
+                aria-label="Command input"
+                sx={{
+                  "& .MuiInputBase-root": {
+                    fontSize: "1.125rem",
+                    fontWeight: 400,
+                    lineHeight: 1.6,
+                    color: "text.primary",
+                    "&::placeholder": { color: "text.disabled", opacity: 1 },
+                  },
+                  "& .MuiOutlinedInput-root": {
+                    "& fieldset": { borderColor: "divider" },
+                    "&:hover fieldset": { borderColor: "text.secondary" },
+                    "&.Mui-focused fieldset": { borderColor: "primary.main", borderWidth: 2 },
+                  },
+                }}
+              />
+              <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 1 }}>
+                <Button type="submit" size="small" variant="contained" disabled={!command.trim()} startIcon={<ArrowRight fontSize="small" />} sx={{ textTransform: "none", fontWeight: 500, height: 36 }}>
+                  Send
+                </Button>
+              </Box>
+            </form>
           </Box>
         </Stack>
-      </Paper>
+      </Box>
 
       {projects.length > 0 && (
         <Box sx={{ mb: 4 }}>
@@ -202,9 +181,9 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
               Continue Working
             </Typography>
           </Stack>
-          <Stack spacing={1.5} sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-            {projects.map((project) => (
-              <Card key={project.id} variant="outlined" sx={{ p: 2.5, borderColor: "divider", transition: "border-color 0.15s ease, box-shadow 0.15s ease", "&:hover": { borderColor: "primary.light", boxShadow: 1 }, cursor: "pointer" }} onClick={() => (window.location.href = `/work/${project.id}`)}>
+          <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, flexWrap: "wrap", gap: 2 }}>
+            {projects.slice(0, 3).map((project) => (
+              <Card key={project.id} variant="outlined" sx={{ p: 2.5, width: { xs: "100%", md: 352 }, minHeight: 156, borderRadius: "12px", borderColor: "divider", transition: "border-color 0.15s ease", "&:hover": { borderColor: "primary.light" }, cursor: "pointer" }} onClick={() => (window.location.href = `/work/${project.id}`)}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
                   <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -247,10 +226,9 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
                 </Box>
               </Card>
             ))}
-          </Stack>
+          </Box>
         </Box>
       )}
-
       {attentionItems.length > 0 && (
         <Box sx={{ mb: 4 }}>
           <Stack spacing={1.5} direction="row" sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", mb: 2 }}>
@@ -261,16 +239,19 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
           </Stack>
           <Stack spacing={1} sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {attentionItems.map((item) => (
-              <Alert key={item.id} severity={item.severity} variant="filled" sx={{ borderRadius: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }} action={<Button size="small" variant="outlined" sx={{ textTransform: "none", fontWeight: 500 }}>{item.actionLabel}</Button>}>
+              <Paper key={item.id} elevation={0} variant="outlined" sx={{ borderColor: item.severity === "error" ? "error.main" : item.severity === "warning" ? "warning.main" : "info.main", borderRadius: 1, p: 2, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25, flex: 1, minWidth: 200 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                     {item.projectName}
                   </Typography>
-                  <Typography variant="body2" color="inherit">
+                  <Typography variant="body2" color="text.secondary">
                     {item.message}
                   </Typography>
                 </Box>
-              </Alert>
+                <Button size="small" variant="outlined" sx={{ textTransform: "none", fontWeight: 500 }}>
+                  {item.actionLabel}
+                </Button>
+              </Paper>
             ))}
           </Stack>
         </Box>
@@ -285,7 +266,7 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
           </Stack>
           <Paper elevation={0} variant="outlined" sx={{ borderColor: "divider" }}>
             <List dense disablePadding sx={{ maxHeight: 400, overflow: "auto" }}>
-              {activities.slice(0, 15).map((activity) => (
+              {activities.slice(0, 8).map((activity) => (
                 <ListItem key={activity.id} sx={{ px: 2, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
                   <ListItemIcon sx={{ minWidth: 40, color: "text.secondary" }}>
                     <FolderOpen fontSize="small" sx={{ color: "text.secondary" }} />
@@ -316,7 +297,7 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
         </Box>
       )}
 
-      {projects.length === 0 && activities.length === 0 && attentionItems.length === 0 && !loading && (
+      {projects.length === 0 && activities.length === 0 && attentionItems.length === 0 && (
         <Box sx={{ mt: 4, textAlign: "center", color: "text.secondary" }}>
           <Paper elevation={0} variant="outlined" sx={{ p: 4, borderColor: "divider" }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>

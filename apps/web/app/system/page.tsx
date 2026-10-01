@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { apiBase } from "@/server/apiBase";
 
 export const metadata: Metadata = {
   title: "System | LOGOS",
@@ -7,7 +8,7 @@ export const metadata: Metadata = {
 
 async function getSystemData() {
   try {
-    const response = await fetch("http://localhost:3001/api/system", {
+    const response = await fetch(`${apiBase()}/api/system`, {
       headers: {
         "Content-Type": "application/json",
       },
