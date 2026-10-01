@@ -1,20 +1,76 @@
-import { Router } from 'express';
+import { Router, Request } from 'express';
 import { z } from 'zod';
 import fs from 'fs';
 import {
   db,
   getDocumentEvents,
   resolveSafePath,
-  writeDocument,
   WriterIdentity,
+  computeContentHash,
+  getDocumentByPath,
+  getDocumentIdentity,
 } from '../db';
 import { reconcile } from '../services/reconcile';
 import { registerLogosWrite } from '../services/watcher';
-import { computeContentHash } from '../db';
 import { config } from '../config';
 import { validate } from '../middleware/validate';
+import {
+  createDocument,
+  updateDocument,
+  deleteDocument,
+  getActiveDocument,
+  ConflictDetails,
+} from '../services/documentService';
 
-const writerEnum = z.enum(['USER', 'LOGOS', 'AGENT', 'AUTOMATION']);
+// Actor context type for internal service calls
+export type ActorContext = 'HTTP' | 'INTERNAL' | 'AGENT' | 'SCHEDULER';
+
+function determineWriterFromContext(context: ActorContext): WriterIdentity {
+  switch (context) {
+    case 'HTTP':
+      return 'USER';
+    case 'INTERNAL':
+      return 'LOGOS';
+    case 'AGENT':
+      return 'AGENT';
+    case 'SCHEDULER':
+      return 'AUTOMATION';
+    default:
+      return 'USER';
+  }
+}
+
+// Internal service function that sets actor context
+export function writeDocumentInternal(
+  path: string,
+  content: string,
+  expectedVersion: number | undefined,
+  expectedHash: string | undefined,
+  context: ActorContext = 'INTERNAL'
+): ReturnType<typeof updateDocument> {
+  const writer = determineWriterFromContext(context);
+  return updateDocument({
+    id: '', // will be resolved by path
+    content,
+    expectedVersion: expectedVersion || 0,
+    expectedHash: expectedHash || '',
+    writer,
+  });
+}
+
+// Internal service function for document creation
+export function createDocumentInternal(
+  path: string,
+  content: string,
+  context: ActorContext = 'INTERNAL'
+): ReturnType<typeof createDocument> {
+  const writer = determineWriterFromContext(context);
+  return createDocument({
+    path,
+    content,
+    writer,
+  });
+}
 
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -27,19 +83,18 @@ const eventsQuery = z.object({
 
 const idParam = z.object({ id: z.string().min(1) });
 
+// Writer removed from public API - server determines from context (HTTP -> USER)
 const writeBody = z.object({
   path: z.string().min(1).max(500),
   content: z.string().max(10 * 1024 * 1024),
   expectedVersion: z.number().int().min(0),
   expectedHash: z.string().min(1),
-  writer: writerEnum.default('LOGOS'),
 });
 
 const updateBody = z.object({
   content: z.string().max(10 * 1024 * 1024),
   expectedVersion: z.number().int().min(0),
   expectedHash: z.string().min(1),
-  writer: writerEnum.default('LOGOS'),
 });
 
 const reconcileBody = z.object({ path: z.string().optional() });
@@ -76,8 +131,20 @@ router.get(
     if (!doc) {
       return res.status(404).json({ error: 'not_found' });
     }
+
+    // Fetch document content from filesystem
+    let content = '';
+    try {
+      const safePath = resolveSafePath(config.vaultPath, (doc as any).path);
+      if (fs.existsSync(safePath)) {
+        content = fs.readFileSync(safePath, 'utf8');
+      }
+    } catch (err) {
+      console.warn('[API] Could not read document content:', err);
+    }
+
     const events = getDocumentEvents(req.params.id, 10);
-    return res.json({ ...(doc as object), recentEvents: events });
+    return res.json({ ...(doc as object), content, recentEvents: events });
   }
 );
 
@@ -85,27 +152,27 @@ router.post(
   '/api/documents',
   validate({ body: writeBody }),
   (req, res) => {
-    const { path: docPath, content, writer, expectedVersion, expectedHash } =
+    const { path: docPath, content } =
       req.body as z.infer<typeof writeBody>;
 
-    const result = writeDocument({
-      path: docPath,
-      content,
-      writer: writer as WriterIdentity,
-      expectedVersion,
-      expectedHash,
-    });
-
-    if (result.conflict) {
-      return res.status(409).json({
-        error: 'conflict',
-        conflict: result.conflict,
-        currentDocument: result.document,
+    try {
+      const result = createDocument({
+        path: docPath,
+        content,
+        writer: determineWriterFromContext('HTTP'),
       });
-    }
 
-    registerLogosWrite(docPath, computeContentHash(content));
-    return res.status(201).json({ id: result.document.id, status: 'created', document: result.document });
+      registerLogosWrite(docPath, computeContentHash(content));
+      return res.status(201).json({ id: result.document.id, status: 'created', document: result.document });
+    } catch (err: any) {
+      if (err.conflict) {
+        return res.status(409).json({
+          error: 'conflict',
+          conflict: err.conflict,
+        });
+      }
+      throw err;
+    }
   }
 );
 
@@ -113,31 +180,33 @@ router.put(
   '/api/documents/:id',
   validate({ params: idParam, body: updateBody }),
   (req, res) => {
-    const { content, writer, expectedVersion, expectedHash } = req.body as z.infer<typeof updateBody>;
+    const { content, expectedVersion, expectedHash } = req.body as z.infer<typeof updateBody>;
 
-    const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id) as any;
+    const doc = getActiveDocument(req.params.id);
     if (!doc) {
       return res.status(404).json({ error: 'not_found' });
     }
 
-    const result = writeDocument({
-      path: doc.path,
-      content,
-      writer: writer as WriterIdentity,
-      expectedVersion,
-      expectedHash,
-    });
-
-    if (result.conflict) {
-      return res.status(409).json({
-        error: 'conflict',
-        conflict: result.conflict,
-        currentDocument: result.document,
+    try {
+      const result = updateDocument({
+        id: req.params.id,
+        content,
+        writer: determineWriterFromContext('HTTP'),
+        expectedVersion,
+        expectedHash,
       });
-    }
 
-    registerLogosWrite(doc.path, computeContentHash(content));
-    return res.json({ id: result.document.id, status: 'updated', document: result.document });
+      registerLogosWrite(doc.path, computeContentHash(content));
+      return res.json({ id: result.document.id, status: 'updated', document: result.document });
+    } catch (err: any) {
+      if (err.conflict) {
+        return res.status(409).json({
+          error: 'conflict',
+          conflict: err.conflict,
+        });
+      }
+      throw err;
+    }
   }
 );
 
@@ -145,16 +214,37 @@ router.delete(
   '/api/documents/:id',
   validate({ params: idParam }),
   async (req, res) => {
-    const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id) as any;
+    const doc = getActiveDocument(req.params.id);
     if (!doc) {
       return res.status(404).json({ error: 'not_found' });
     }
 
-    const safePath = resolveSafePath(config.vaultPath, doc.path);
-    if (fs.existsSync(safePath)) {
-      await fs.promises.unlink(safePath);
+    // For DELETE, we need expectedVersion and expectedHash from query params
+    // Since the current schema doesn't include them in body, we'll require them as query params
+    const expectedVersion = parseInt(req.query.expectedVersion as string, 10);
+    const expectedHash = req.query.expectedHash as string;
+    
+    if (isNaN(expectedVersion) || !expectedHash) {
+      return res.status(400).json({ error: 'expectedVersion and expectedHash query parameters required' });
     }
-    return res.json({ status: 'deleted' });
+
+    try {
+      const result = deleteDocument({
+        id: req.params.id,
+        expectedVersion,
+        expectedHash,
+      });
+
+      return res.json({ status: 'deleted', document: result.document });
+    } catch (err: any) {
+      if (err.conflict) {
+        return res.status(409).json({
+          error: 'conflict',
+          conflict: err.conflict,
+        });
+      }
+      throw err;
+    }
   }
 );
 

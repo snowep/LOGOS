@@ -28,6 +28,7 @@ export interface DocumentIdentity {
   version: number;         // monotonically increasing integer
   created_at: number;
   updated_at: number;
+  deleted_at: number | null;
   last_writer: WriterIdentity;
   size: number;
   mime_type?: string;
@@ -42,7 +43,7 @@ export interface VectorIdMapping {
 
 // Schema migration system
 const SCHEMA_VERSION_KEY = 'schema_version';
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 function getSchemaVersion(): number {
   try {
@@ -70,6 +71,7 @@ function runMigration(version: number): void {
           version INTEGER NOT NULL DEFAULT 1,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
+          deleted_at INTEGER,
           last_writer TEXT NOT NULL CHECK (last_writer IN ('USER', 'LOGOS', 'AGENT', 'AUTOMATION')),
           size INTEGER NOT NULL DEFAULT 0,
           mime_type TEXT
@@ -91,6 +93,42 @@ function runMigration(version: number): void {
         );
       `);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_vector_mapping_rowid ON vector_id_mapping(vector_rowid);`);
+      break;
+    case 3:
+      // Migration 3: Add deleted_at column and remove cascade delete from document_events
+      console.log('Running migration 3: Adding tombstone support...');
+      try {
+        db.exec(`ALTER TABLE documents ADD COLUMN deleted_at INTEGER;`);
+      } catch (e) {
+        // Column may already exist
+      }
+      // Recreate document_events without cascade delete (if table exists)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS document_events_new (
+          id TEXT PRIMARY KEY,
+          document_id TEXT NOT NULL,
+          event_type TEXT NOT NULL CHECK (event_type IN ('created', 'modified', 'deleted', 'renamed', 'moved')),
+          path TEXT NOT NULL,
+          previous_path TEXT,
+          version INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          writer_identity TEXT NOT NULL CHECK (writer_identity IN ('USER', 'LOGOS', 'AGENT', 'AUTOMATION')),
+          metadata TEXT,
+          timestamp INTEGER NOT NULL,
+          FOREIGN KEY (document_id) REFERENCES documents(id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_document_events_doc ON document_events_new(document_id);`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_document_events_timestamp ON document_events_new(timestamp DESC);`);
+      // Copy existing events if table exists
+      try {
+        db.exec(`INSERT INTO document_events_new SELECT * FROM document_events;`);
+        db.exec(`DROP TABLE document_events;`);
+        db.exec(`ALTER TABLE document_events_new RENAME TO document_events;`);
+      } catch (e) {
+        // document_events table didn't exist yet, just rename the new one
+        db.exec(`ALTER TABLE document_events_new RENAME TO document_events;`);
+      }
       break;
   }
 }
@@ -232,7 +270,7 @@ export function initializeSchema() {
       writer_identity TEXT NOT NULL CHECK (writer_identity IN ('USER', 'LOGOS', 'AGENT', 'AUTOMATION')),
       metadata TEXT,
       timestamp INTEGER NOT NULL,
-      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+      FOREIGN KEY (document_id) REFERENCES documents(id)
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_document_events_doc ON document_events(document_id);`);
@@ -300,6 +338,7 @@ export function getOrCreateDocumentIdentity(
       version: 1,
       created_at: now,
       updated_at: now,
+      deleted_at: null,
       last_writer: writer,
       size,
     };
@@ -423,6 +462,11 @@ export function writeDocument(options: WriteDocumentOptions): WriteDocumentResul
       };
     }
 
+    // If content hasn't changed, don't increment version
+    if (hash === existing.current_hash) {
+      return { document: existing };
+    }
+
     // No conflict - update
     const updated: DocumentIdentity = {
       ...existing,
@@ -448,6 +492,7 @@ export function writeDocument(options: WriteDocumentOptions): WriteDocumentResul
       version: 1,
       created_at: now,
       updated_at: now,
+      deleted_at: null,
       last_writer: writer,
       size,
     };

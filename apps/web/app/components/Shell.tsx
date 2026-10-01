@@ -189,11 +189,14 @@ export default function Shell({ children }: ShellProps) {
           position="fixed"
           elevation={0}
           sx={{
-            width: { md: `calc(100% - ${DRAWER_WIDTH_COLLAPSED}px)` },
-            ml: { md: `${DRAWER_WIDTH_COLLAPSED}px` },
+            width: { md: `calc(100% - ${drawerWidth}px)` },
+            ml: { md: `${drawerWidth}px` },
             height: APP_BAR_HEIGHT,
             zIndex: (theme.zIndex.drawer as number) + 1,
-            transition: 'none',
+            transition: theme.transitions.create(['width', 'margin'], {
+              easing: theme.transitions.easing.sharp,
+              duration: theme.transitions.duration.leavingScreen,
+            }),
           }}
         >
           <Toolbar sx={{ px: { md: 4, xs: 2 }, justifyContent: 'space-between', minHeight: APP_BAR_HEIGHT }}>
@@ -244,10 +247,13 @@ export default function Shell({ children }: ShellProps) {
             pt: APP_BAR_HEIGHT,
             px: { md: 4, xs: 2 },
             pb: 4,
-            width: { md: `calc(100% - ${DRAWER_WIDTH_COLLAPSED}px)` },
-            ml: { md: `${DRAWER_WIDTH_COLLAPSED}px` },
+            width: { md: `calc(100% - ${drawerWidth}px)` },
+            ml: { md: `${drawerWidth}px` },
             minHeight: `calc(100vh - ${APP_BAR_HEIGHT}px)`,
-            transition: 'none',
+            transition: theme.transitions.create(['width', 'margin'], {
+              easing: theme.transitions.easing.sharp,
+              duration: theme.transitions.duration.enteringScreen,
+            }),
             maxWidth: { md: `calc(${layout.contentMaxWidth}px + ${layout.pagePadding * 2}px)` },
             mx: { md: 'auto' },
           }}

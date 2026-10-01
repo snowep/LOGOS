@@ -14,6 +14,7 @@ import {
 } from '../db';
 import { config } from '../config';
 import { broadcastEvent } from '../routes/events';
+import { isEligiblePath } from './eligibility';
 
 // Track LOGOS-initiated writes to prevent self-write loops
 const logosWrites = new Map<string, { path: string; timestamp: number; contentHash: string }>();
@@ -43,29 +44,113 @@ function determineWriter(relativePath: string, contentHash: string): WriterIdent
   return isLogosWrite(relativePath, contentHash) ? 'LOGOS' : 'USER';
 }
 
-// Rename/move detection: track unlink events temporarily
-interface PendingDelete {
-  documentId: string;
-  hash: string;
-  path: string;
-  timestamp: number;
-}
+// State machine states for each tracked path
+type PathState = 
+  | { status: 'idle' }
+  | { status: 'pending_delete'; documentId: string; hash: string; timestamp: number; path: string }
+  | { status: 'processing_add'; path: string; contentHash: string; stats: Stats }
+  | { status: 'pending_rename'; oldPath: string; documentId: string; hash: string; timestamp: number };
 
-const pendingDeletes = new Map<string, PendingDelete>();
-
-// Track pending adds for move detection
-interface PendingAdd {
-  documentId: string;
-  hash: string;
-  path: string;
-  timestamp: number;
-}
-
-const pendingAdds = new Map<string, PendingAdd>();
+// Single source of truth for path state
+const pathStates = new Map<string, PathState>();
 
 let watcher: FSWatcher | null = null;
+let isStarting = false;
+
+// Shared eligibility check - mirrors reconcile eligibility
+function checkEligible(relativePath: string, stats?: Stats): boolean {
+  return isEligiblePath(relativePath, stats);
+}
+
+function emitDeleted(documentId: string, relativePath: string, version: number, hash: string, writer: WriterIdentity): void {
+  recordDocumentEvent(documentId, 'deleted', relativePath, version, hash, writer);
+  broadcastEvent('file-change', {
+    event: 'deleted',
+    documentId,
+    path: relativePath,
+    version,
+    hash,
+    writer,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Vault deleted: ${relativePath} (v${version}, ${writer})`);
+}
+
+function emitCreated(relativePath: string, content: string, contentHash: string, writer: WriterIdentity, stats: Stats): void {
+  const doc = getOrCreateDocumentIdentity(relativePath, content, writer);
+  recordDocumentEvent(doc.id, 'created', relativePath, 1, contentHash, writer, undefined, { size: stats.size });
+  broadcastEvent('file-change', {
+    event: 'created',
+    documentId: doc.id,
+    path: relativePath,
+    version: 1,
+    hash: contentHash,
+    writer,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Vault created: ${relativePath} (v1, ${writer})`);
+}
+
+function emitModified(relativePath: string, content: string, contentHash: string, writer: WriterIdentity, stats: Stats): void {
+  const doc = getOrCreateDocumentIdentity(relativePath, content, writer);
+  recordDocumentEvent(doc.id, 'modified', relativePath, doc.version, contentHash, writer, undefined, { size: stats.size });
+  broadcastEvent('file-change', {
+    event: 'modified',
+    documentId: doc.id,
+    path: relativePath,
+    version: doc.version,
+    hash: contentHash,
+    writer,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Vault modified: ${relativePath} (v${doc.version}, ${writer})`);
+}
+
+function emitRenamed(documentId: string, oldPath: string, newPath: string, version: number, hash: string, writer: WriterIdentity, stats: Stats): void {
+  const now = Date.now();
+  db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(newPath, now, documentId);
+  recordDocumentEvent(documentId, 'renamed', newPath, version, hash, writer, oldPath, { size: stats.size });
+  broadcastEvent('file-change', {
+    event: 'renamed',
+    documentId,
+    path: newPath,
+    version,
+    hash,
+    writer,
+    previousPath: oldPath,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Vault renamed: ${oldPath} -> ${newPath} (v${version}, ${writer})`);
+}
+
+function emitMoved(documentId: string, oldPath: string, newPath: string, version: number, hash: string, writer: WriterIdentity, stats: Stats): void {
+  const now = Date.now();
+  db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(newPath, now, documentId);
+  recordDocumentEvent(documentId, 'moved', newPath, version, hash, writer, oldPath, { size: stats.size });
+  broadcastEvent('file-change', {
+    event: 'moved',
+    documentId,
+    path: newPath,
+    version,
+    hash,
+    writer,
+    previousPath: oldPath,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Vault moved: ${oldPath} -> ${newPath} (v${version}, ${writer})`);
+}
+
+function clearAllState(): void {
+  pathStates.clear();
+}
 
 export function startWatcher(): FSWatcher {
+  // Singleton: return existing watcher if already running
+  if (watcher) return watcher;
+  if (isStarting) throw new Error('Watcher start already in progress');
+
+  isStarting = true;
+  
   const vaultPath = config.vaultPath;
 
   if (!fs.existsSync(vaultPath)) {
@@ -74,22 +159,8 @@ export function startWatcher(): FSWatcher {
 
   watcher = chokidar.watch(vaultPath, {
     ignored: (p: string) => {
-      const normalized = p.replace(/\\/g, '/');
-      if (/[/\\]\\../.test(normalized)) return true;
-      if (/node_modules/.test(normalized)) return true;
-      if (/\\.tmp$/.test(normalized)) return true;
-      if (/~$/.test(normalized)) return true;
-      if (/\\.log$/.test(normalized)) return true;
-      if (/\\.bak$/.test(normalized)) return true;
-      if (/\\.db(-wal|-shm)?$/.test(normalized)) return true;
-      if (!normalized.endsWith('.md') && !normalized.endsWith('.markdown')) {
-        try {
-          return !fs.statSync(p).isDirectory();
-        } catch {
-          return true;
-        }
-      }
-      return false;
+      const relativePath = path.relative(vaultPath, p).replace(/\\/g, '/');
+      return !checkEligible(relativePath);
     },
     persistent: true,
     awaitWriteFinish: {
@@ -102,14 +173,14 @@ export function startWatcher(): FSWatcher {
     try {
       const relativePath = path.relative(vaultPath, fullPath).replace(/\\/g, '/');
 
-      if (!relativePath.endsWith('.md') && !relativePath.endsWith('.markdown')) return;
       if (!relativePath || relativePath === '.') return;
-
-      let stats: Stats | null = null;
-      let content: string | null = null;
-      let contentHash = '';
+      if (!checkEligible(relativePath)) return;
 
       if (event === 'change' || event === 'add') {
+        let stats: Stats | null = null;
+        let content: string | null = null;
+        let contentHash = '';
+
         try {
           const fileStats = await fs.promises.stat(fullPath);
           if (fileStats.size > config.maxFileSize) {
@@ -123,112 +194,140 @@ export function startWatcher(): FSWatcher {
           console.log(`Could not read file ${relativePath}:`, err.message);
           return;
         }
-      } else if (event === 'unlink') {
-        const doc = getDocumentByPath(relativePath);
-        if (doc) {
-          contentHash = doc.current_hash;
-          pendingDeletes.set(doc.id, {
-            documentId: doc.id,
-            hash: contentHash,
-            path: relativePath,
-            timestamp: Date.now(),
-          });
-          // Bounded interval for rename/move detection
-          setTimeout(() => {
-            const pending = pendingDeletes.get(doc.id);
-            if (pending && pending.hash === contentHash) {
-              pendingDeletes.delete(doc.id);
-            }
-          }, 2000);
+
+        const writer = determineWriter(relativePath, contentHash);
+        const currentState = pathStates.get(relativePath);
+
+        // Deduplicate: if same path+hash already processed, skip (no version bump)
+        const existingDoc = getDocumentByPath(relativePath);
+        if (existingDoc && existingDoc.current_hash === contentHash) {
+          return;
         }
-      }
 
-      const writer = determineWriter(relativePath, contentHash);
-
-      let documentId = '';
-      let version = 1;
-      let eventType: 'created' | 'modified' | 'deleted' | 'renamed' | 'moved' = 'created';
-      let previousPath: string | undefined;
-
-      if (event === 'unlink') {
-        const doc = getDocumentByPath(relativePath);
-        if (doc) {
-          documentId = doc.id;
-          version = doc.version;
-        } else {
-          documentId = generateDocumentId(relativePath);
+        // Check for pending delete from THIS same path (unlinked, now added back with same content)
+        if (currentState?.status === 'pending_delete' && currentState.hash === contentHash) {
+          // File was unlinked and now added back with same content - treat as modified
+          pathStates.delete(relativePath);
+          emitModified(relativePath, content!, contentHash, writer, stats!);
+          return;
         }
-        eventType = 'deleted';
-      } else if (content !== null) {
-        // Check if this is a rename (add with matching hash from recent unlink)
+
+        // Check for matching pending delete from OTHER path (rename/move)
         let matchedRename = false;
         let matchedMove = false;
-        if (event === 'add') {
-          for (const [delId, delInfo] of pendingDeletes.entries()) {
-            if (delInfo.hash === contentHash) {
-              const oldDoc = db.prepare('SELECT * FROM documents WHERE id = ?').get(delId) as any;
-              if (oldDoc) {
-                // Check if parent directory changed (move) vs same directory (rename)
-                const oldDir = path.dirname(delInfo.path);
-                const newDir = path.dirname(relativePath);
-                if (oldDir === newDir) {
-                  matchedRename = true;
-                  eventType = 'renamed';
-                } else {
-                  matchedMove = true;
-                  eventType = 'moved';
-                }
-                documentId = delId;
-                previousPath = oldDoc.path;
-                const now = Date.now();
-                db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relativePath, now, delId);
-                version = oldDoc.version;
-                pendingDeletes.delete(delId);
-                break;
+        let matchedPath = '';
+        let matchedDoc: any = null;
+
+        for (const [otherPath, otherState] of pathStates.entries()) {
+          if (otherPath === relativePath) continue;
+          if (otherState.status === 'pending_delete' && otherState.hash === contentHash) {
+            const oldDoc = getDocumentIdentity(otherState.documentId);
+            if (oldDoc) {
+              const oldDir = path.dirname(otherState.path);
+              const newDir = path.dirname(relativePath);
+              
+              if (oldDir === newDir) {
+                matchedRename = true;
+              } else {
+                matchedMove = true;
               }
+              matchedPath = otherPath;
+              matchedDoc = oldDoc;
+              
+              if (matchedRename) {
+                emitRenamed(otherState.documentId, otherState.path, relativePath, oldDoc.version, contentHash, writer, stats!);
+              } else {
+                emitMoved(otherState.documentId, otherState.path, relativePath, oldDoc.version, contentHash, writer, stats!);
+              }
+              
+              pathStates.delete(otherPath);
+              break;
             }
           }
         }
 
-        if (!matchedRename && !matchedMove) {
-          const doc = getOrCreateDocumentIdentity(relativePath, content, writer);
-          documentId = doc.id;
-          version = doc.version;
-          eventType = doc.version === 1 ? 'created' : 'modified';
+        if (matchedRename || matchedMove) {
+          // Mark this path as the new location
+          pathStates.set(relativePath, { status: 'pending_rename', oldPath: matchedPath, documentId: matchedDoc!.id, hash: contentHash, timestamp: Date.now() });
+          return;
         }
-      } else {
-        return;
+
+        // Normal add/change
+        pathStates.set(relativePath, { status: 'processing_add', path: relativePath, contentHash, stats: stats! });
+        
+        if (existingDoc) {
+          emitModified(relativePath, content!, contentHash, writer, stats!);
+        } else {
+          emitCreated(relativePath, content!, contentHash, writer, stats!);
+        }
+        
+        pathStates.delete(relativePath);
+      } else if (event === 'unlink') {
+        const doc = getDocumentByPath(relativePath);
+        if (!doc) return;
+
+        // Store pending deletion with bounded window
+        pathStates.set(relativePath, {
+          status: 'pending_delete',
+          documentId: doc.id,
+          hash: doc.current_hash,
+          timestamp: Date.now(),
+          path: relativePath,
+        });
+
+        // Bounded window for rename/move detection
+        setTimeout(async () => {
+          const state = pathStates.get(relativePath);
+          if (state?.status === 'pending_delete') {
+            // Window expired - check if matching add arrived
+            let hasMatchingAdd = false;
+            
+            // Check if this path now exists (re-added same content)
+            try {
+              const currentStats = await fs.promises.stat(fullPath);
+              const currentContent = await fs.promises.readFile(fullPath, 'utf8');
+              const currentHash = computeContentHash(currentContent);
+              if (currentHash === state.hash) {
+                hasMatchingAdd = true;
+              }
+            } catch {
+              // File doesn't exist
+            }
+
+            // Check other paths for matching hash
+            if (!hasMatchingAdd) {
+              for (const [otherPath, otherState] of pathStates.entries()) {
+                if (otherPath === relativePath) continue;
+                if (otherState.status === 'pending_rename' && otherState.hash === state.hash) {
+                  hasMatchingAdd = true;
+                  break;
+                }
+              }
+            }
+
+            if (!hasMatchingAdd) {
+              // No match - emit deleted
+              const doc = getDocumentIdentity(state.documentId);
+              const docVersion = doc?.version ?? 1;
+              const writer = determineWriter(relativePath, state.hash);
+              emitDeleted(state.documentId, relativePath, docVersion, state.hash, writer);
+              pathStates.delete(relativePath);
+            }
+            // If hasMatchingAdd, the add handler will process it
+          }
+        }, 2000);
       }
-
-      if (event !== 'unlink' || getDocumentByPath(relativePath)) {
-        recordDocumentEvent(
-          documentId!,
-          eventType!,
-          relativePath,
-          version,
-          contentHash,
-          writer,
-          previousPath,
-          { size: stats?.size }
-        );
-      }
-
-      broadcastEvent('file-change', {
-        event: eventType!,
-        documentId: documentId!,
-        path: relativePath,
-        version,
-        hash: contentHash,
-        writer,
-        timestamp: new Date().toISOString(),
-      });
-
-      console.log(`Vault ${eventType!}: ${relativePath} (v${version}, ${writer})`);
     } catch (err: any) {
       console.error(`Watcher error for ${fullPath}:`, err.message);
     }
   });
 
+  watcher.on('error', (err) => {
+    console.error('Watcher error:', err);
+  });
+
+  isStarting = false;
+  console.log('Vault watcher started');
   return watcher;
 }
 
@@ -237,4 +336,6 @@ export async function stopWatcher(): Promise<void> {
     await watcher.close();
     watcher = null;
   }
+  clearAllState();
+  console.log('Vault watcher stopped');
 }

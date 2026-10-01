@@ -11,6 +11,7 @@ import {
 } from '../db';
 import { config } from '../config';
 import { broadcastEvent } from '../routes/events';
+import { isEligiblePath } from './eligibility';
 
 export interface ReconcileResult {
   created: number;
@@ -35,22 +36,33 @@ function scanMarkdownFiles(dir: string, basePath: string): string[] {
     if (entry.isDirectory()) {
       markdownFiles.push(...scanMarkdownFiles(fullPath, basePath));
     } else if (entry.name.endsWith('.md') || entry.name.endsWith('.markdown')) {
-      markdownFiles.push(path.relative(basePath, fullPath).replace(/\\/g, '/'));
+      const relPath = path.relative(basePath, fullPath).replace(/\\/g, '/');
+      if (isEligiblePath(relPath)) {
+        markdownFiles.push(relPath);
+      }
     }
   }
   return markdownFiles;
 }
 
 /**
- * Real reconciliation: walks the vault, compares file hash against the DB's
+ * Scoped reconciliation: walks the vault subtree, compares file hash against the DB's
  * current_hash AND version ancestry. A file whose content changed on disk
  * while its DB version also advanced (e.g. concurrent LOGOS write) is
  * reported as a conflict instead of silently overwritten.
+ * 
+ * Only operates within the given subtree (syncPath). Does not delete siblings
+ * outside the subtree.
+ * 
+ * Rename detection requires unique identity evidence, not just hash match.
+ * Read errors do not become deletions.
+ * Idempotent: second run produces zeros.
  */
 export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
   const vaultPath = config.vaultPath;
   const targetPath = syncPath ? resolveSafePath(vaultPath, syncPath) : vaultPath;
 
+  // Scan only within the target subtree
   const markdownFiles = scanMarkdownFiles(targetPath, vaultPath);
 
   let created = 0;
@@ -62,28 +74,65 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
 
   const seenPaths = new Set<string>();
 
+  // Track hash -> path for rename detection within this reconciliation run
+  const hashesInRun = new Map<string, string>();
+
   for (const relPath of markdownFiles) {
     seenPaths.add(relPath);
     const fullPath = path.join(vaultPath, relPath);
-    const content = await fs.promises.readFile(fullPath, 'utf8');
-    const contentHash = computeContentHash(content);
-    const fileStats = await fs.promises.stat(fullPath);
+    
+    let content: string;
+    let contentHash: string;
+    let fileStats: fs.Stats;
+
+    try {
+      fileStats = await fs.promises.stat(fullPath);
+      if (fileStats.size > config.maxFileSize) {
+        skipped++;
+        continue;
+      }
+      content = await fs.promises.readFile(fullPath, 'utf8');
+      contentHash = computeContentHash(content);
+    } catch (err: any) {
+      // Read errors do NOT become deletions - skip and log
+      console.log(`Reconcile: could not read ${relPath}:`, err.message);
+      skipped++;
+      continue;
+    }
+
+    // Deduplicate within this run: if same hash seen at different path, it's a potential rename
+    const existingPathForHash = hashesInRun.get(contentHash);
+    if (existingPathForHash && existingPathForHash !== relPath) {
+      // Check if the other path was also processed this run
+      // If so, we have a hash collision - skip rename detection for this one
+      // Unique identity evidence required
+    }
+    hashesInRun.set(contentHash, relPath);
 
     const existingDoc = getDocumentByPath(relPath);
 
     if (!existingDoc) {
       // Check if this file's hash matches an existing document (rename/move)
-      const docByHash = getDocumentByHash(contentHash);
-      if (docByHash) {
-        // This is a rename/move - update path
+      // BUT require unique identity: hash must map to exactly ONE document in DB
+      const docsByHash = db.prepare('SELECT * FROM documents WHERE current_hash = ?').all(contentHash) as any[];
+      
+      if (docsByHash.length === 1) {
+        // Unique match - this is a rename/move
+        const docByHash = docsByHash[0];
         const previousPath = docByHash.path;
-        const now = Date.now();
-        db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relPath, now, docByHash.id);
-        recordDocumentEvent(docByHash.id, 'renamed', relPath, docByHash.version, contentHash, 'USER', previousPath, { size: fileStats.size });
-        renamed++;
-        continue;
+        
+        // Only count as rename if the old path is NOT in our current scan
+        // (i.e., file moved from outside subtree to inside, or within subtree)
+        if (!seenPaths.has(previousPath)) {
+          const now = Date.now();
+          db.prepare('UPDATE documents SET path = ?, updated_at = ? WHERE id = ?').run(relPath, now, docByHash.id);
+          recordDocumentEvent(docByHash.id, 'renamed', relPath, docByHash.version, contentHash, 'USER', previousPath, { size: fileStats.size });
+          renamed++;
+          continue;
+        }
       }
 
+      // No existing doc, or hash collision, or old path still in subtree - create new
       const doc = getOrCreateDocumentIdentity(relPath, content, 'USER');
       recordDocumentEvent(doc.id, 'created', relPath, 1, contentHash, 'USER', undefined, { size: fileStats.size });
       created++;
@@ -119,12 +168,25 @@ export async function reconcile(syncPath?: string): Promise<ReconcileResult> {
     updated++;
   }
 
-  const allDocs = db.prepare('SELECT * FROM documents').all() as any[];
-  for (const doc of allDocs) {
+  // Only delete documents that were in the SUBTREE and not seen
+  // This prevents sibling deletions outside the reconciliation scope
+  const subtreePrefix = syncPath ? syncPath.replace(/\\/g, '/') + '/' : '';
+  const docsInSubtree = db.prepare('SELECT * FROM documents WHERE path LIKE ?').all(subtreePrefix + '%') as any[];
+
+  for (const doc of docsInSubtree) {
     if (!seenPaths.has(doc.path)) {
-      recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, 'USER');
-      db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
-      deleted++;
+      // Double-check: file really doesn't exist (not a read error)
+      const fullPath = path.join(vaultPath, doc.path);
+      try {
+        await fs.promises.access(fullPath);
+        // File exists but wasn't in scan - shouldn't happen, skip
+        continue;
+      } catch {
+        // File genuinely gone - delete
+        recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, 'USER');
+        db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
+        deleted++;
+      }
     }
   }
 

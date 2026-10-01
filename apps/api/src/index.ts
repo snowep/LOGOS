@@ -13,8 +13,8 @@ const server = http.createServer(app);
 
 startWatcher();
 
-server.listen(config.port, () => {
-  console.log(`LOGOS API listening on http://localhost:${config.port}`);
+server.listen(config.port, config.host, () => {
+  console.log(`LOGOS API listening on http://${config.host}:${config.port}`);
   console.log(`Vault: ${config.vaultPath}`);
   console.log(`DB: ${config.dbPath}`);
 });

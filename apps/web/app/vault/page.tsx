@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -20,6 +20,9 @@ import {
   ListItemButton,
   CircularProgress,
   Paper,
+  Skeleton,
+  Alert,
+  AlertTitle,
 } from '@mui/material';
 import {
   Folder,
@@ -33,9 +36,18 @@ import {
   Search,
   MoreVert,
   InsertDriveFile,
+  Sync,
+  SyncProblem,
+  WifiOff,
+  CloudDone,
+  Error as ErrorIcon,
+  VisibilityOff,
+  Article,
 } from '@mui/icons-material';
 import { marked } from 'marked';
+import DOMPurify from 'isomorphic-dompurify';
 import Shell from '../components/Shell';
+import { useVaultEvents, VaultEvent, ConnectionState } from '@/hooks/useVaultEvents';
 
 // Define knowledge categories with const assertions for literal types
 const knowledgeCategories = [
@@ -56,6 +68,55 @@ interface Document {
   path: string;
   category: Category;
   modified: string;
+  content?: string;
+  version?: number;
+  lastWriter?: 'USER' | 'LOGOS' | 'AGENT' | 'AUTOMATION';
+}
+
+function ConnectionIndicator({ state }: { state: ConnectionState }) {
+  const config = useMemo(() => {
+    switch (state) {
+      case 'connected':
+        return { color: 'success', icon: CloudDone, label: 'Connected' };
+      case 'connecting':
+        return { color: 'warning', icon: Sync, label: 'Connecting...' };
+      case 'disconnected':
+        return { color: 'warning', icon: WifiOff, label: 'Disconnected' };
+      case 'error':
+        return { color: 'error', icon: ErrorIcon, label: 'Connection Error' };
+    }
+  }, [state]);
+
+  const IconComponent = config.icon as typeof CloudDone;
+
+  return (
+    <Tooltip title={config.label}>
+      <Box sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        px: 1,
+        py: 0.5,
+        borderRadius: 1,
+        bgcolor: `${config.color}Light`,
+        color: `${config.color}Main`,
+        ...(state === 'connecting' && {
+          '& > :first-child': {
+            animation: 'spin 1s linear infinite',
+            '@keyframes spin': {
+              from: { transform: 'rotate(0deg)' },
+              to: { transform: 'rotate(360deg)' },
+            },
+          },
+        }),
+      }}>
+        <IconComponent fontSize="small" />
+        <Typography variant="caption" sx={{ fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          {config.label}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
 }
 
 function VaultContent() {
@@ -67,43 +128,63 @@ function VaultContent() {
   const [menuActions, setMenuActions] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showPaths, setShowPaths] = useState(false);
+  const [documentContentLoading, setDocumentContentLoading] = useState(false);
+
+  // SSE connection
+  const { connectionState, lastEvent, eventCount, reconnect, disconnect } = useVaultEvents({
+    onEvent: (event: VaultEvent) => {
+      console.log('[Vault] SSE event received:', event);
+      // Invalidate and refetch document list on file changes
+      if (event.event === 'file-change' || event.event === 'sync-complete') {
+        fetchDocuments();
+      }
+      // If the currently selected document was modified, refetch its content
+      if (selectedDocument && (event.documentId === selectedDocument.id || event.path === selectedDocument.path)) {
+        fetchDocumentContent(selectedDocument.id);
+      }
+    },
+    onConnectionChange: (state) => {
+      console.log('[Vault] SSE connection state:', state);
+    },
+  });
 
   // Fetch documents from API
-  useEffect(() => {
+  const fetchDocuments = useCallback(async () => {
     let isCancelled = false;
     let retries = 3;
-    
-    const fetchDocuments = async () => {
+
+    const doFetch = async () => {
       while (retries > 0 && !isCancelled) {
         try {
           console.log('[Vault] Fetching documents from /api/documents?limit=100 (retries left:', retries, ')');
           const response = await fetch('/api/documents?limit=100');
           console.log('[Vault] Response status:', response.status, 'ok:', response.ok, 'headers:', response.headers.get('content-type'));
-          
+
           if (isCancelled) return;
-          
+
           if (!response.ok) {
             const text = await response.text();
             console.log('[Vault] Response error text:', text);
             throw new Error(`HTTP error: ${response.status} - ${text}`);
           }
-          
+
           const contentType = response.headers.get('content-type');
           if (!contentType || !contentType.includes('application/json')) {
             const text = await response.text();
             console.log('[Vault] Non-JSON response:', text.substring(0, 200));
             throw new Error(`Expected JSON but got ${contentType}: ${text.substring(0, 100)}`);
           }
-          
+
           const data = await response.json();
           console.log('[Vault] Data received:', data);
-          
+
           if (isCancelled) return;
-          
+
           if (data.error) {
             throw new Error(data.error);
           }
-          
+
           const transformedDocs: Document[] = (data.documents || []).map((doc: any) => {
             // Determine category from path
             const pathParts = doc.path.split('/');
@@ -112,20 +193,22 @@ function VaultContent() {
             else if (pathParts.includes('memory')) category = 'memory';
             else if (pathParts.includes('people')) category = 'people';
             else if (pathParts.includes('decisions')) category = 'decisions';
-            
+
             return {
               id: doc.id,
               name: doc.path.replace(/\.md$/, '').split('/').pop() || doc.path,
               path: doc.path,
               category,
               modified: new Date(doc.updated_at).toISOString(),
+              version: doc.version,
+              lastWriter: doc.last_writer,
             };
           });
-          
+
           console.log('[Vault] Transformed docs:', transformedDocs);
-          
+
           if (isCancelled) return;
-          
+
           setDocuments(transformedDocs);
           setError(null);
           return; // Success - exit retry loop
@@ -141,18 +224,58 @@ function VaultContent() {
           }
         }
       }
-      
+
       if (!isCancelled) {
         setLoading(false);
       }
     };
-    
-    fetchDocuments();
-    
+
+    doFetch();
+
     return () => {
       isCancelled = true;
     };
   }, []);
+
+  // Fetch document content
+  const fetchDocumentContent = useCallback(async (docId: string) => {
+    if (!docId) return;
+    
+    setDocumentContentLoading(true);
+    try {
+      const response = await fetch(`/api/documents/${docId}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch document: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      setSelectedDocument(prev => prev ? {
+        ...prev,
+        content: data.content || '',
+        version: data.version,
+        lastWriter: data.last_writer,
+      } : null);
+    } catch (err) {
+      console.error('[Vault] Failed to fetch document content:', err);
+    } finally {
+      setDocumentContentLoading(false);
+    }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
+
+  // Handle SSE events - refetch on relevant changes
+  useEffect(() => {
+    if (lastEvent && (lastEvent.event === 'file-change' || lastEvent.event === 'sync-complete')) {
+      // The onEvent callback handles refetching
+    }
+  }, [lastEvent]);
 
   // Filter documents by category and search
   const filteredDocuments = useMemo(() => {
@@ -171,9 +294,10 @@ function VaultContent() {
   };
 
   // Handle document selection
-  const handleDocumentSelect = (doc: Document) => {
+  const handleDocumentSelect = useCallback((doc: Document) => {
     setSelectedDocument(doc);
-  };
+    fetchDocumentContent(doc.id);
+  }, [fetchDocumentContent]);
 
   // Handle search change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -192,35 +316,89 @@ function VaultContent() {
     setMenuActions(null);
   };
 
-  // Action handlers (placeholders)
+  // Sanitize markdown HTML before rendering
+  const sanitizeMarkdown = (markdown: string): string => {
+    const html = marked.parse(markdown);
+    return DOMPurify.sanitize(html as string, {
+      ALLOWED_TAGS: [
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'p', 'br', 'hr',
+        'strong', 'em', 'u', 's', 'code', 'pre',
+        'blockquote', 'ul', 'ol', 'li',
+        'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+        'div', 'span'
+      ],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'id'],
+    });
+  };
+
+  // Action handlers
   const handleAskLogos = () => {
     if (menuActions) {
       window.location.href = `/chat?q=${encodeURIComponent(`Analyze ${menuActions.name} from the vault`)}`;
     }
+    handleMenuClose();
   };
 
   const handleEdit = () => {
-    console.log('Edit:', menuActions?.name);
+    if (menuActions) {
+      console.log('Edit:', menuActions.name);
+      // Navigate to editor or open edit modal
+    }
+    handleMenuClose();
   };
 
   const handleRename = () => {
-    console.log('Rename:', menuActions?.name);
+    if (menuActions) {
+      const newName = prompt('Enter new name:', menuActions.name);
+      if (newName && newName !== menuActions.name) {
+        console.log('Rename:', menuActions.name, '->', newName);
+        // Implement rename API call
+      }
+    }
+    handleMenuClose();
   };
 
   const handleMove = () => {
-    console.log('Move:', menuActions?.name);
+    if (menuActions) {
+      console.log('Move:', menuActions.name);
+      // Implement move dialog
+    }
+    handleMenuClose();
   };
 
   const handleArchive = () => {
-    console.log('Archive:', menuActions?.name);
+    if (menuActions) {
+      if (confirm(`Archive "${menuActions.name}"? This will move it to the archive folder.`)) {
+        console.log('Archive:', menuActions.name);
+        // Implement archive API call
+      }
+    }
+    handleMenuClose();
   };
 
   const handleShowRelated = () => {
-    console.log('Show related:', menuActions?.name);
+    if (menuActions) {
+      console.log('Show related:', menuActions.name);
+      // Navigate to related documents view
+    }
+    handleMenuClose();
   };
 
   const handleFindConflicts = () => {
-    console.log('Find conflicts:', menuActions?.name);
+    if (menuActions) {
+      console.log('Find conflicts:', menuActions.name);
+      // Navigate to conflicts view
+    }
+    handleMenuClose();
+  };
+
+  const handleRefresh = () => {
+    fetchDocuments();
+  };
+
+  const handleReconnect = () => {
+    reconnect();
   };
 
   if (loading) {
@@ -238,94 +416,208 @@ function VaultContent() {
       <Shell>
         <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
           <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
-            <Typography variant="h6" color="error.main" gutterBottom>
-              Failed to load documents
-            </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
+            <Alert severity="error" sx={{ mb: 2 }}>
+              <AlertTitle>Failed to load documents</AlertTitle>
               {error}
-            </Typography>
-            <Button 
-              variant="contained" 
-              color="primary" 
-              onClick={() => window.location.reload()}
-              sx={{ mt: 2 }}
-            >
-              Retry
-            </Button>
+            </Alert>
+            <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'center', gap: 2 }}>
+              <Button variant="contained" color="primary" onClick={handleRefresh}>
+                Retry
+              </Button>
+              <Button variant="outlined" onClick={() => window.location.reload()}>
+                Reload Page
+              </Button>
+            </Box>
           </Paper>
         </Box>
       </Shell>
     );
   }
 
+  // Render document content with sanitized markdown
+  const renderDocumentContent = (doc: Document) => {
+    if (documentContentLoading) {
+      return (
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2 }}>
+          <Skeleton variant="text" width="60%" height={32} />
+          <Skeleton variant="text" width="100%" height={16} />
+          <Skeleton variant="text" width="80%" height={16} />
+          <Divider />
+          <Skeleton variant="rectangular" width="100%" height={200} />
+        </Box>
+      );
+    }
+
+    if (!doc.content) {
+      return (
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a1a1aa', p: 4, textAlign: 'center' }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <Article fontSize="large" sx={{ opacity: 0.5 }} />
+            <Typography variant="body1">No content available</Typography>
+            <Typography variant="body2" color="text.secondary">
+              The document content could not be loaded.
+            </Typography>
+          </Box>
+        </Box>
+      );
+    }
+
+    return (
+      <Box sx={{ flex: 1, overflow: 'auto', p: 3 }}>
+        <Box
+          component="div"
+          dangerouslySetInnerHTML={{
+            __html: sanitizeMarkdown(doc.content),
+          }}
+          sx={{
+            lineHeight: 1.7,
+            fontSize: '0.95rem',
+            color: '#e4e4e7',
+            '& h1, & h2, & h3, & h4': {
+              color: '#fff',
+              marginTop: '1.5em',
+              marginBottom: '0.5em',
+              fontWeight: 600,
+            },
+            '& h1': { fontSize: '1.75rem', borderBottom: '1px solid #27272a', paddingBottom: '0.25em' },
+            '& h2': { fontSize: '1.5rem' },
+            '& h3': { fontSize: '1.25rem' },
+            '& code': {
+              bgcolor: 'rgba(255,255,255,0.08)',
+              px: 0.5,
+              py: 0.125,
+              borderRadius: 4,
+              fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+              fontSize: '0.9em',
+            },
+            '& pre': {
+              bgcolor: '#0d0d0d',
+              border: '1px solid #27272a',
+              borderRadius: 8,
+              p: 2,
+              overflow: 'auto',
+              '& code': {
+                bgcolor: 'transparent',
+                px: 0,
+                py: 0,
+                fontSize: '0.85rem',
+                lineHeight: 1.6,
+              },
+            },
+            '& blockquote': {
+              borderLeft: '3px solid #6366f1',
+              pl: 2,
+              ml: 0,
+              color: '#a1a1aa',
+              fontStyle: 'italic',
+            },
+            '& ul, & ol': { pl: 4 },
+            '& a': { color: '#818cf8', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
+            '& table': { width: '100%', borderCollapse: 'collapse', marginY: 2 },
+            '& th, & td': { border: '1px solid #27272a', px: 2, py: 1 },
+            '& th': { bgcolor: 'rgba(255,255,255,0.04)', fontWeight: 600 },
+            '& img': { maxWidth: '100%', borderRadius: 4, height: 'auto' },
+            '& hr': { borderColor: '#27272a', my: 3 },
+          }}
+        />
+      </Box>
+    );
+  };
+
   return (
     <Shell>
       <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', bgcolor: '#0a0a0a', color: '#fafafa' }}>
-        {/* Knowledge Pane */}
-        <Box sx={{ width: 240, borderRight: '1px solid #27272a', p: 2, display: 'flex', flexDirection: 'column' }}>
-          <Typography variant="h6" gutterBottom color="#fff">
-            KNOWLEDGE
-          </Typography>
-          <List>
+        {/* Knowledge Pane - 200px */}
+        <Box sx={{ width: 200, borderRight: '1px solid #27272a', p: 2, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="h6" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+              KNOWLEDGE
+            </Typography>
+            <Tooltip title="Refresh">
+              <IconButton size="small" onClick={handleRefresh} aria-label="Refresh">
+                <Sync fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <List dense>
             {knowledgeCategories.map((cat) => (
-              <ListItem key={cat.key} sx={{ mb: 1 }}>
+              <ListItem key={cat.key} sx={{ mb: 0.5, px: 0 }}>
                 <ListItemButton
                   selected={selectedCategory === cat.key}
                   onClick={() => handleCategorySelect(cat.key)}
                   sx={{
-                    borderRadius: 4,
+                    borderRadius: 2,
+                    py: 0.75,
                     '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
                     ...(selectedCategory === cat.key && { bgcolor: 'rgba(99,102,241,0.12)' }),
                   }}
                 >
-                  <ListItemIcon>{cat.icon}</ListItemIcon>
-                  <ListItemText primary={cat.label} />
+                  <ListItemIcon sx={{ minWidth: 36, color: selectedCategory === cat.key ? '#818cf8' : '#a1a1aa' }}>
+                    {cat.icon}
+                  </ListItemIcon>
+                  <ListItemText primary={cat.label} sx={{ variant: 'body2', fontWeight: 500 }} />
                 </ListItemButton>
               </ListItem>
             ))}
           </List>
         </Box>
 
-        {/* Documents Pane */}
-        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', p: 2, borderRight: '1px solid #27272a' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h5" gutterBottom color="#fff">
-              DOCUMENTS
-            </Typography>
+        {/* Documents Pane - 320px */}
+        <Box sx={{ width: 320, minWidth: 320, borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column', flexShrink: 0, bgcolor: '#0d0d0d' }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: '1px solid #27272a' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Typography variant="h5" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+                DOCUMENTS
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <ConnectionIndicator state={connectionState} />
+                <Tooltip title={showPaths ? 'Hide paths' : 'Show paths'}>
+                  <IconButton size="small" onClick={() => setShowPaths(!showPaths)} aria-label={showPaths ? 'Hide paths' : 'Show paths'}>
+                    {showPaths ? <VisibilityOff fontSize="small" /> : <InsertDriveFile fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            </Box>
+          </Box>
+          
+          <Box sx={{ p: 2, borderBottom: '1px solid #27272a' }}>
             <TextField
               placeholder="Search documents..."
               value={searchQuery}
               onChange={handleSearchChange}
-              sx={{ width: 250 }}
               size="small"
+              sx={{ width: '100%' }}
             />
           </Box>
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            <List>
+          
+          <Divider sx={{ m: 0 }} />
+          
+          <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+            <List dense>
               {filteredDocuments.length === 0 ? (
-                <ListItem>
-                  <ListItemText primary="No documents found" sx={{ color: '#a1a1aa' }} />
+                <ListItem sx={{ px: 2, py: 4, textAlign: 'center' }}>
+                  <ListItemText primary="No documents found" sx={{ color: '#a1a1aa', variant: 'body2' }} />
                 </ListItem>
               ) : (
                 filteredDocuments.map((doc) => (
-                  <ListItem key={doc.id} sx={{ mb: 1 }}>
+                  <ListItem key={doc.id} sx={{ mb: 0.5, px: 1 }}>
                     <ListItemButton
                       selected={selectedDocument?.id === doc.id}
                       onClick={() => handleDocumentSelect(doc)}
                       sx={{
-                        borderRadius: 4,
+                        borderRadius: 2,
+                        py: 0.75,
                         '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
                         ...(selectedDocument?.id === doc.id && { bgcolor: 'rgba(99,102,241,0.12)' }),
                       }}
                     >
-                      <ListItemIcon>
-                        <InsertDriveFile />
+                      <ListItemIcon sx={{ minWidth: 36, color: '#a1a1aa' }}>
+                        <InsertDriveFile fontSize="small" />
                       </ListItemIcon>
                       <ListItemText
                         primary={doc.name}
-                        secondary={doc.path}
-                        sx={{ primary: { fontWeight: 500 } }}
+                        secondary={showPaths ? doc.path : `v${doc.version || 1} • ${doc.lastWriter || '—'} • ${new Date(doc.modified).toLocaleDateString()}`}
+                        sx={{ primary: { variant: 'body2', fontWeight: 500 }, secondary: { variant: 'caption', color: 'text.secondary' } }}
                       />
                     </ListItemButton>
                   </ListItem>
@@ -335,64 +627,88 @@ function VaultContent() {
           </Box>
         </Box>
 
-        {/* Preview Pane */}
-        <Box sx={{ width: 400, borderLeft: '1px solid #27272a', p: 3, display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h5" gutterBottom color="#fff">
+        {/* Preview Pane - remaining */}
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: '#0a0a0a' }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: '1px solid #27272a' }}>
+            <Typography variant="h5" gutterBottom color="#fff" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
               PREVIEW
             </Typography>
             {selectedDocument && (
               <Tooltip title="Actions">
-                <IconButton onClick={(e) => handleMenuOpen(e, selectedDocument)} aria-controls="simple-menu" aria-haspopup="true">
+                <IconButton onClick={(e) => handleMenuOpen(e, selectedDocument)} aria-controls="document-menu" aria-haspopup="true">
                   <MoreVert />
                 </IconButton>
               </Tooltip>
             )}
           </Box>
-          <Divider sx={{ my: 1 }} />
+          <Divider sx={{ m: 0 }} />
           {selectedDocument ? (
-            <Box sx={{ flex: 1, overflow: 'auto' }}>
-              <div
-                dangerouslySetInnerHTML={{
-                  __html: marked.parse(`# ${selectedDocument.name}\n\n*Last modified: ${new Date(selectedDocument.modified).toLocaleString()}*\n\n---\n\n*This is a preview of the document content. In a real implementation, this would fetch the actual markdown content from the vault.*`)
-                }}
-              />
-            </Box>
+            renderDocumentContent(selectedDocument)
           ) : (
-            <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a1a1aa' }}>
-              Select a document to preview
+            <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a1a1aa', p: 4, textAlign: 'center' }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                <InsertDriveFile fontSize="large" sx={{ opacity: 0.3 }} />
+                <Typography variant="body1">Select a document to preview</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Choose a document from the middle pane to view its content here.
+                </Typography>
+              </Box>
             </Box>
           )}
-        </Box>
 
-        {/* Actions Menu */}
-        <Menu
-          anchorEl={anchorEl}
-          open={Boolean(anchorEl)}
-          onClose={handleMenuClose}
-        >
-          <MenuItem onClick={handleAskLogos}>
-            Ask LOGOS
-          </MenuItem>
-          <MenuItem onClick={handleEdit}>
-            Edit
-          </MenuItem>
-          <MenuItem onClick={handleRename}>
-            Rename
-          </MenuItem>
-          <MenuItem onClick={handleMove}>
-            Move
-          </MenuItem>
-          <MenuItem onClick={handleArchive}>
-            Archive
-          </MenuItem>
-          <MenuItem onClick={handleShowRelated}>
-            Show related
-          </MenuItem>
-          <MenuItem onClick={handleFindConflicts}>
-            Find conflicts
-          </MenuItem>
-        </Menu>
+          {/* Actions Menu */}
+          <Menu
+            id="document-menu"
+            anchorEl={anchorEl}
+            open={Boolean(anchorEl)}
+            onClose={handleMenuClose}
+            sx={{ '& .MuiPaper-root': { bgcolor: '#18181b', border: '1px solid #27272a' } }}
+          >
+            <MenuItem onClick={handleAskLogos} sx={{ '&:hover': { bgcolor: 'rgba(99,102,241,0.12)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Memory fontSize="small" color="primary" />
+                Ask LOGOS
+              </Box>
+            </MenuItem>
+            <MenuItem onClick={handleEdit} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Edit fontSize="small" />
+                Edit
+              </Box>
+            </MenuItem>
+            <MenuItem onClick={handleRename} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Edit fontSize="small" />
+                Rename
+              </Box>
+            </MenuItem>
+            <MenuItem onClick={handleMove} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Share fontSize="small" />
+                Move
+              </Box>
+            </MenuItem>
+            <MenuItem onClick={handleArchive} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Delete fontSize="small" color="warning" />
+                Archive
+              </Box>
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={handleShowRelated} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Share fontSize="small" />
+                Show related
+              </Box>
+            </MenuItem>
+            <MenuItem onClick={handleFindConflicts} sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SyncProblem fontSize="small" color="warning" />
+                Find conflicts
+              </Box>
+            </MenuItem>
+          </Menu>
+        </Box>
       </Box>
     </Shell>
   );

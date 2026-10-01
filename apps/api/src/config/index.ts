@@ -20,6 +20,7 @@ function getWorkspaceRoot(): string {
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
+  host: process.env.HOST || '127.0.0.1',
   vaultPath: getWorkspaceRoot(),
   dbPath: process.env.DB_PATH || path.join(getLogosHome(), 'system', 'logos.db'),
   cors: {
