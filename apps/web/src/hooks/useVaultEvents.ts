@@ -59,6 +59,15 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
 
+  // Stable refs for callbacks to prevent EventSource recreation on render
+  const onFileChangeRef = useRef(onFileChange);
+  const onReconcileCompleteRef = useRef(onReconcileComplete);
+  const onConnectionChangeRef = useRef(onConnectionChange);
+
+  onFileChangeRef.current = onFileChange;
+  onReconcileCompleteRef.current = onReconcileComplete;
+  onConnectionChangeRef.current = onConnectionChange;
+
   const cleanup = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -73,6 +82,11 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
   const connect = useCallback(() => {
     if (!isMountedRef.current) return;
 
+    // Prevent duplicate connections
+    if (eventSourceRef.current && eventSourceRef.current.readyState !== EventSource.CLOSED) {
+      return;
+    }
+
     try {
       // SSE endpoint is at /events/vault (proxied from /api/events/vault)
       const eventSource = new EventSource('/events/vault');
@@ -81,7 +95,7 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
       eventSource.onopen = () => {
         if (!isMountedRef.current) return;
         setConnectionState('connected');
-        onConnectionChange?.('connected');
+        onConnectionChangeRef.current?.('connected');
         reconnectAttemptsRef.current = 0;
       };
 
@@ -91,7 +105,7 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
           const fileChangeEvent: FileChangeEventData = JSON.parse(event.data);
           setLastEvent(fileChangeEvent);
           setEventCount((prev) => prev + 1);
-          onFileChange?.(fileChangeEvent);
+          onFileChangeRef.current?.(fileChangeEvent);
         } catch (err) {
           console.warn('[useVaultEvents] Failed to parse file-change event:', err);
         }
@@ -103,7 +117,7 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
           const reconcileEvent: ReconcileCompleteEventData = JSON.parse(event.data);
           setLastEvent(reconcileEvent);
           setEventCount((prev) => prev + 1);
-          onReconcileComplete?.(reconcileEvent);
+          onReconcileCompleteRef.current?.(reconcileEvent);
         } catch (err) {
           console.warn('[useVaultEvents] Failed to parse reconcile-complete event:', err);
         }
@@ -112,7 +126,7 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
       eventSource.onerror = () => {
         if (!isMountedRef.current) return;
         setConnectionState('disconnected');
-        onConnectionChange?.('disconnected');
+        onConnectionChangeRef.current?.('disconnected');
         cleanup();
 
         // Attempt reconnection with exponential backoff
@@ -122,21 +136,21 @@ export function useVaultEvents(options: UseVaultEventsOptions = {}) {
           reconnectTimeoutRef.current = setTimeout(() => {
             if (isMountedRef.current) {
               setConnectionState('connecting');
-              onConnectionChange?.('connecting');
+              onConnectionChangeRef.current?.('connecting');
               connect();
             }
           }, delay);
         } else {
           setConnectionState('error');
-          onConnectionChange?.('error');
+          onConnectionChangeRef.current?.('error');
         }
       };
     } catch (err) {
       console.error('[useVaultEvents] Failed to create EventSource:', err);
       setConnectionState('error');
-      onConnectionChange?.('error');
+      onConnectionChangeRef.current?.('error');
     }
-  }, [cleanup, onFileChange, onReconcileComplete, onConnectionChange, reconnectInterval, maxReconnectAttempts]);
+  }, [cleanup, reconnectInterval, maxReconnectAttempts]);
 
   useEffect(() => {
     isMountedRef.current = true;

@@ -7,7 +7,7 @@ import {
   computeContentHash,
   generateDocumentId,
   getOrCreateDocumentIdentity,
-  getDocumentByPath,
+  getActiveDocumentByPath,
   recordDocumentEvent,
   getDocumentIdentity,
   WriterIdentity,
@@ -203,7 +203,7 @@ export function startWatcher(): FSWatcher {
         const currentState = pathStates.get(relativePath);
 
         // Deduplicate: if same path+hash already processed, skip (no version bump)
-        const existingDoc = getDocumentByPath(relativePath);
+        const existingDoc = getActiveDocumentByPath(relativePath);
         if (existingDoc && existingDoc.current_hash === contentHash) {
           return;
         }
@@ -268,7 +268,7 @@ export function startWatcher(): FSWatcher {
         
         pathStates.delete(relativePath);
       } else if (event === 'unlink') {
-        const doc = getDocumentByPath(relativePath);
+        const doc = getActiveDocumentByPath(relativePath);
         if (!doc) return;
 
         // Store pending deletion with bounded window

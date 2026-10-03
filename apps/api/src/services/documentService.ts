@@ -6,7 +6,7 @@ import {
   generateDocumentId,
   getDocumentIdentity,
   getOrCreateDocumentIdentity,
-  getDocumentByPath,
+  getActiveDocumentByPath,
   getDocumentIncludingTombstone,
   recordDocumentEvent,
   WriterIdentity,
@@ -52,6 +52,7 @@ export interface ConflictDetails {
  * Cross-resource atomicity: file write + DB update + event emission
  * Uses a recovery boundary: if any step fails after file write, we attempt rollback.
  * If rollback fails, we log for manual recovery.
+ * Uses SQLite transaction for DB + event atomicity.
  */
 export function createDocument(options: CreateDocumentOptions): DocumentOperationResult {
   const { path: docPath, content, writer } = options;
@@ -67,8 +68,8 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
   }
 
   // Check if active document already exists at this path
-  const existingDoc = getDocumentByPath(docPath);
-  if (existingDoc && existingDoc.deleted_at === null) {
+  const existingDoc = getActiveDocumentByPath(docPath);
+  if (existingDoc) {
     throw createConflictError({
       ...existingDoc,
       current_hash: hash,
@@ -125,10 +126,11 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
   fs.renameSync(tempPath, fullPath);
 
   // Cross-resource atomicity: DB record creation with rollback on failure
-  let docId: string | null = null;
+  // Use SQLite transaction for DB + event atomicity
   let dbRecordCreated = false;
   let eventRecorded = false;
   let eventBroadcast = false;
+  let docId: string | null = null;
 
   try {
     // Create DB record with stable UUID (uses getOrCreateDocumentIdentity which handles tombstone resurrection)
@@ -139,14 +141,16 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
     }
     dbRecordCreated = true;
 
-    // Record event
-    recordDocumentEvent(docId, 'created', docPath, 1, hash, writer, undefined, { size });
+    // Use transaction for DB update + event record
+    db.transaction(() => {
+      recordDocumentEvent(docId!, 'created', docPath, 1, hash, writer, undefined, { size });
+    })();
     eventRecorded = true;
 
-    // Broadcast event
+    // Broadcast event (outside transaction - if this fails, we log but don't rollback DB)
     broadcastEvent('file-change', {
       event: 'created',
-      documentId: docId,
+      documentId: docId!,
       path: docPath,
       version: 1,
       hash,
@@ -181,6 +185,7 @@ export function createDocument(options: CreateDocumentOptions): DocumentOperatio
 
 /**
  * Update an existing document: verify DB + filesystem state, atomic write, 409 on mismatch
+ * Uses SQLite transaction for DB + event atomicity.
  */
 export function updateDocument(options: UpdateDocumentOptions): DocumentOperationResult {
   const { id, content, expectedVersion, expectedHash, writer } = options;
@@ -243,38 +248,42 @@ export function updateDocument(options: UpdateDocumentOptions): DocumentOperatio
   fs.renameSync(tempPath, fullPath);
 
   // Cross-resource atomicity: DB update + event with recovery boundary
+  // Use SQLite transaction for DB + event atomicity
   let dbUpdated = false;
   let eventRecorded = false;
   let eventBroadcast = false;
 
   try {
-    // Update DB - increment version only on real content change
-    const updatedVersion = doc.version + 1;
+    // Use transaction for DB update + event record
+    db.transaction(() => {
+      // Update DB - increment version only on real content change
+      const updatedVersion = doc.version + 1;
+      db.prepare(`
+        UPDATE documents SET current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
+        WHERE id = ?
+      `).run(newHash, updatedVersion, now, writer, size, id);
+
+      // Record event
+      recordDocumentEvent(doc.id, 'modified', doc.path, updatedVersion, newHash, writer, undefined, { size });
+    })();
+    dbUpdated = true;
+    eventRecorded = true;
+
     const updated: DocumentIdentity = {
       ...doc,
       current_hash: newHash,
-      version: updatedVersion,
+      version: doc.version + 1,
       updated_at: now,
       last_writer: writer,
       size,
     };
 
-    db.prepare(`
-      UPDATE documents SET current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?
-      WHERE id = ?
-    `).run(newHash, updatedVersion, now, writer, size, id);
-    dbUpdated = true;
-
-    // Record event
-    recordDocumentEvent(doc.id, 'modified', doc.path, updatedVersion, newHash, writer, undefined, { size });
-    eventRecorded = true;
-
-    // Broadcast event
+    // Broadcast event (outside transaction - if this fails, we log but don't rollback DB)
     broadcastEvent('file-change', {
       event: 'modified',
       documentId: doc.id,
       path: doc.path,
-      version: updatedVersion,
+      version: updated.version,
       hash: newHash,
       writer,
       timestamp: new Date().toISOString(),
@@ -296,6 +305,7 @@ export function updateDocument(options: UpdateDocumentOptions): DocumentOperatio
 
 /**
  * Delete a document: verify, remove file, tombstone (deleted_at), event
+ * Uses SQLite transaction for DB + event atomicity.
  */
 export function deleteDocument(options: DeleteDocumentOptions): DocumentOperationResult {
   const { id, expectedVersion, expectedHash } = options;
@@ -329,6 +339,7 @@ export function deleteDocument(options: DeleteDocumentOptions): DocumentOperatio
   const now = Date.now();
 
   // Cross-resource atomicity: file deletion + DB tombstone + event with recovery boundary
+  // Use SQLite transaction for DB + event atomicity
   let fileDeleted = false;
   let dbTombstoned = false;
   let eventRecorded = false;
@@ -341,23 +352,28 @@ export function deleteDocument(options: DeleteDocumentOptions): DocumentOperatio
     }
     fileDeleted = true;
 
-    // Tombstone in DB (set deleted_at, keep record for history)
-    db.prepare(`
-      UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?
-    `).run(now, now, id);
-    dbTombstoned = true;
+    let tombstoned: DocumentIdentity;
 
-    const tombstoned: DocumentIdentity = {
-      ...doc,
-      deleted_at: now,
-      updated_at: now,
-    };
+    // Use transaction for DB tombstone + event record
+    db.transaction(() => {
+      // Tombstone in DB (set deleted_at, keep record for history)
+      db.prepare(`
+        UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?
+      `).run(now, now, id);
+      dbTombstoned = true;
 
-    // Record event with correct writer identity
-    recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, doc.last_writer, undefined, { size: doc.size });
+      tombstoned = {
+        ...doc,
+        deleted_at: now,
+        updated_at: now,
+      };
+
+      // Record event with correct writer identity
+      recordDocumentEvent(doc.id, 'deleted', doc.path, doc.version, doc.current_hash, doc.last_writer, undefined, { size: doc.size });
+    })();
     eventRecorded = true;
 
-    // Broadcast event
+    // Broadcast event (outside transaction - if this fails, we log but don't rollback DB)
     broadcastEvent('file-change', {
       event: 'deleted',
       documentId: doc.id,
@@ -369,7 +385,7 @@ export function deleteDocument(options: DeleteDocumentOptions): DocumentOperatio
     });
     eventBroadcast = true;
 
-    return { document: tombstoned, eventType: 'deleted' };
+    return { document: tombstoned!, eventType: 'deleted' };
   } catch (err) {
     // Recovery boundary
     if (fileDeleted && !dbTombstoned) {

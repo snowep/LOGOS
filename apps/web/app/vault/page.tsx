@@ -130,28 +130,34 @@ function VaultContent() {
   const [showPaths, setShowPaths] = useState(false);
   const [documentContentLoading, setDocumentContentLoading] = useState(false);
 
-  // SSE connection
+  // SSE connection - stable callbacks
+  const onFileChange = useCallback((event: FileChangeEventData) => {
+    console.log('[Vault] SSE event received:', event);
+    // Invalidate and refetch document list on file changes
+    if (event.event === 'created' || event.event === 'modified' || event.event === 'deleted' || event.event === 'renamed' || event.event === 'moved') {
+      fetchDocuments();
+    }
+    // If the currently selected document was modified, refetch its content
+    if (selectedDocument && (event.documentId === selectedDocument.id || event.path === selectedDocument.path)) {
+      fetchDocumentContent(selectedDocument.id);
+    }
+  }, [selectedDocument]);
+
+  const onReconcileComplete = useCallback((event: ReconcileCompleteEventData) => {
+    console.log('[Vault] Reconcile complete:', event);
+    if (event.scanQuality !== 'FAILED') {
+      fetchDocuments();
+    }
+  }, []);
+
+  const onConnectionChange = useCallback((state: ConnectionState) => {
+    console.log('[Vault] SSE connection state:', state);
+  }, []);
+
   const { connectionState, lastEvent, eventCount, reconnect, disconnect } = useVaultEvents({
-    onFileChange: (event: FileChangeEventData) => {
-      console.log('[Vault] SSE event received:', event);
-      // Invalidate and refetch document list on file changes
-      if (event.event === 'created' || event.event === 'modified' || event.event === 'deleted' || event.event === 'renamed' || event.event === 'moved') {
-        fetchDocuments();
-      }
-      // If the currently selected document was modified, refetch its content
-      if (selectedDocument && (event.documentId === selectedDocument.id || event.path === selectedDocument.path)) {
-        fetchDocumentContent(selectedDocument.id);
-      }
-    },
-    onReconcileComplete: (event: ReconcileCompleteEventData) => {
-      console.log('[Vault] Reconcile complete:', event);
-      if (event.scanQuality !== 'FAILED') {
-        fetchDocuments();
-      }
-    },
-    onConnectionChange: (state) => {
-      console.log('[Vault] SSE connection state:', state);
-    },
+    onFileChange,
+    onReconcileComplete,
+    onConnectionChange,
   });
 
   // Fetch documents from API
@@ -245,7 +251,7 @@ function VaultContent() {
   // Fetch document content
   const fetchDocumentContent = useCallback(async (docId: string) => {
     if (!docId) return;
-    
+
     setDocumentContentLoading(true);
     try {
       const response = await fetch(`/api/documents/${docId}`);
@@ -256,7 +262,7 @@ function VaultContent() {
       if (data.error) {
         throw new Error(data.error);
       }
-      
+
       setSelectedDocument(prev => prev ? {
         ...prev,
         content: data.content || '',
@@ -342,63 +348,10 @@ function VaultContent() {
     });
   };
 
-  // Action handlers
+  // Action handlers - only implemented ones
   const handleAskLogos = () => {
     if (menuActions) {
       window.location.href = `/chat?q=${encodeURIComponent(`Analyze ${menuActions.name} from the vault`)}`;
-    }
-    handleMenuClose();
-  };
-
-  const handleEdit = () => {
-    if (menuActions) {
-      console.log('Edit:', menuActions.name);
-      // Navigate to editor or open edit modal
-    }
-    handleMenuClose();
-  };
-
-  const handleRename = () => {
-    if (menuActions) {
-      const newName = prompt('Enter new name:', menuActions.name);
-      if (newName && newName !== menuActions.name) {
-        console.log('Rename:', menuActions.name, '->', newName);
-        // Implement rename API call
-      }
-    }
-    handleMenuClose();
-  };
-
-  const handleMove = () => {
-    if (menuActions) {
-      console.log('Move:', menuActions.name);
-      // Implement move dialog
-    }
-    handleMenuClose();
-  };
-
-  const handleArchive = () => {
-    if (menuActions) {
-      if (confirm(`Archive "${menuActions.name}"? This will move it to the archive folder.`)) {
-        console.log('Archive:', menuActions.name);
-        // Implement archive API call
-      }
-    }
-    handleMenuClose();
-  };
-
-  const handleShowRelated = () => {
-    if (menuActions) {
-      console.log('Show related:', menuActions.name);
-      // Navigate to related documents view
-    }
-    handleMenuClose();
-  };
-
-  const handleFindConflicts = () => {
-    if (menuActions) {
-      console.log('Find conflicts:', menuActions.name);
-      // Navigate to conflicts view
     }
     handleMenuClose();
   };
@@ -413,7 +366,7 @@ function VaultContent() {
 
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center' }}>
+      <Box sx={{ display: 'flex', height: 'calc(100dvh - 56px)', alignItems: 'center', justifyContent: 'center' }}>
         <CircularProgress />
       </Box>
     );
@@ -421,7 +374,7 @@ function VaultContent() {
 
   if (error) {
     return (
-      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+      <Box sx={{ display: 'flex', height: 'calc(100dvh - 56px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
         <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
           <Alert severity="error" sx={{ mb: 2 }}>
             <AlertTitle>Failed to load documents</AlertTitle>
@@ -456,7 +409,7 @@ function VaultContent() {
 
     if (!doc.content) {
       return (
-        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a1a1aa', p: 4, textAlign: 'center' }}>
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'text.secondary', p: 4, textAlign: 'center' }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <Article fontSize="large" sx={{ opacity: 0.5 }} />
             <Typography variant="body1">No content available</Typography>
@@ -478,18 +431,18 @@ function VaultContent() {
           sx={{
             lineHeight: 1.7,
             fontSize: '0.95rem',
-            color: '#e4e4e7',
+            color: 'text.primary',
             '& h1, & h2, & h3, & h4': {
-              color: '#fff',
+              color: 'text.primary',
               marginTop: '1.5em',
               marginBottom: '0.5em',
               fontWeight: 600,
             },
-            '& h1': { fontSize: '1.75rem', borderBottom: '1px solid #27272a', paddingBottom: '0.25em' },
+            '& h1': { fontSize: '1.75rem', borderBottom: '1px solid', borderColor: 'divider', paddingBottom: '0.25em' },
             '& h2': { fontSize: '1.5rem' },
             '& h3': { fontSize: '1.25rem' },
             '& code': {
-              bgcolor: 'rgba(255,255,255,0.08)',
+              bgcolor: 'action.hover',
               px: 0.5,
               py: 0.125,
               borderRadius: 4,
@@ -497,8 +450,9 @@ function VaultContent() {
               fontSize: '0.9em',
             },
             '& pre': {
-              bgcolor: '#0d0d0d',
-              border: '1px solid #27272a',
+              bgcolor: 'background.paper',
+              border: '1px solid',
+              borderColor: 'divider',
               borderRadius: 8,
               p: 2,
               overflow: 'auto',
@@ -511,19 +465,20 @@ function VaultContent() {
               },
             },
             '& blockquote': {
-              borderLeft: '3px solid #6366f1',
+              borderLeft: '3px solid',
+              borderLeftColor: 'primary.main',
               pl: 2,
               ml: 0,
-              color: '#a1a1aa',
+              color: 'text.secondary',
               fontStyle: 'italic',
             },
             '& ul, & ol': { pl: 4 },
-            '& a': { color: '#818cf8', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
+            '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
             '& table': { width: '100%', borderCollapse: 'collapse', marginY: 2 },
-            '& th, & td': { border: '1px solid #27272a', px: 2, py: 1 },
-            '& th': { bgcolor: 'rgba(255,255,255,0.04)', fontWeight: 600 },
+            '& th, & td': { border: '1px solid', borderColor: 'divider', px: 2, py: 1 },
+            '& th': { bgcolor: 'action.hover', fontWeight: 600 },
             '& img': { maxWidth: '100%', borderRadius: 4, height: 'auto' },
-            '& hr': { borderColor: '#27272a', my: 3 },
+            '& hr': { borderColor: 'divider', my: 3 },
           }}
         />
       </Box>
@@ -531,9 +486,17 @@ function VaultContent() {
   };
 
   return (
-    <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', bgcolor: 'background.default', color: 'text.primary' }}>
+    <Box sx={{ display: 'flex', height: 'calc(100dvh - 56px)', bgcolor: 'background.default', color: 'text.primary' }}>
       {/* Knowledge Pane - 200px */}
-      <Box sx={{ width: 200, borderRight: 1, borderColor: 'divider', p: 2, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <Box sx={{ 
+        width: { xs: 0, sm: 0, md: 200 }, 
+        display: { xs: 'none', sm: 'none', md: 'flex' },
+        flexDirection: 'column', 
+        flexShrink: 0,
+        borderRight: 1, 
+        borderColor: 'divider', 
+        p: 2 
+      }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
           <Typography variant="h6" gutterBottom color="text.primary" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
             KNOWLEDGE
@@ -567,8 +530,21 @@ function VaultContent() {
         </List>
       </Box>
 
-      {/* Documents Pane - 320px */}
-      <Box sx={{ width: 320, minWidth: 320, borderRight: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', flexShrink: 0, bgcolor: 'background.paper' }}>
+      {/* Documents Pane - 320px on desktop, full width on tablet, drawer on mobile */}
+      <Box sx={{ 
+        width: { xs: '100%', sm: '100%', md: 320, lg: 320 }, 
+        minWidth: { xs: '100%', sm: '100%', md: 320 }, 
+        borderRight: { md: 1, xs: 0, sm: 0 },
+        borderColor: 'divider', 
+        display: 'flex', 
+        flexDirection: 'column', 
+        flexShrink: 0, 
+        bgcolor: 'background.paper',
+        position: { xs: 'relative', md: 'sticky' },
+        top: { md: 56 },
+        height: { md: 'calc(100dvh - 56px)' },
+        overflow: { md: 'hidden' },
+      }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             <Typography variant="h5" gutterBottom color="text.primary" sx={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
@@ -661,7 +637,7 @@ function VaultContent() {
           </Box>
         )}
 
-        {/* Actions Menu */}
+        {/* Actions Menu - only show implemented actions */}
         <Menu
           id="document-menu"
           anchorEl={anchorEl}
@@ -673,43 +649,6 @@ function VaultContent() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Memory fontSize="small" color="primary" />
               Ask LOGOS
-            </Box>
-          </MenuItem>
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Edit fontSize="small" />
-              Edit (coming soon)
-            </Box>
-          </MenuItem>
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Edit fontSize="small" />
-              Rename (coming soon)
-            </Box>
-          </MenuItem>
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Share fontSize="small" />
-              Move (coming soon)
-            </Box>
-          </MenuItem>
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Delete fontSize="small" color="warning" />
-              Archive (coming soon)
-            </Box>
-          </MenuItem>
-          <Divider />
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Share fontSize="small" />
-              Show related (coming soon)
-            </Box>
-          </MenuItem>
-          <MenuItem disabled sx={{ opacity: 0.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <SyncProblem fontSize="small" color="warning" />
-              Find conflicts (coming soon)
             </Box>
           </MenuItem>
         </Menu>

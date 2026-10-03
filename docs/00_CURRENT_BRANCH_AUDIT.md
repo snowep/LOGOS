@@ -5,11 +5,13 @@
 ```text
 repository: snowep/LOGOS
 branch:     p0.4.2-vault-sync-integrity
-head:       373a4e14baae05a8c274a313176da297cdd84c23
-parent:     2763109c530d9c4e53047e78c03c71151451ef08
+head:       a4413cb78f03242d623d3585b24c854dbcba99da
+parent:     373a4e14baae05a8c274a313176da297cdd84c23
 ```
 
-The branch is exactly one commit ahead of the prior P0.4.1 hardening branch.
+The branch is now one corrective pass beyond the earlier audited P0.4.2 snapshot.
+
+> **Audit synchronization note (2026-10-03):** The original findings below were written against the earlier P0.4.2 audit snapshot. The current branch HEAD is `a4413cb78f03242d623d3585b24c854dbcba99da`. Use the corrective directives `08`–`12` in this pack as the authoritative follow-up for the newly verified route, Shell/sidebar, Vault UI, truthfulness, and UI-test findings.
 
 ## Executive result
 

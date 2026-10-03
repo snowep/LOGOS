@@ -22,18 +22,29 @@ import {
   IconButton,
   Typography,
   Paper,
+  Stack,
+  ListItemButton,
+  ListItemIcon,
 } from '@mui/material';
 import {
-  Menu,
-  Search,
+  Menu as MenuIcon,
+  Search as SearchIcon,
   FolderOpen,
   Group,
   Gavel,
   Memory,
   Info,
+  ChevronLeft,
+  Add,
+  Delete,
 } from '@mui/icons-material';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+interface Conversation {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
 
 interface Message {
   id: string;
@@ -42,94 +53,121 @@ interface Message {
   timestamp: Date;
   sources?: string[];
   reasoning?: string;
-  pendingAction?: {
-    type: string;
-    description: string;
-    confirm: () => void;
-    cancel: () => void;
-  };
-  workingState?: string;
 }
 
-interface ContextData {
-  project: {
-    name: string;
-    description: string;
-    lastUpdated: Date;
-  };
-  relatedNotes: Array<{
-    id: string;
-    title: string;
-    snippet: string;
-    timestamp: Date;
-  }>;
-  councilSessions: Array<{
-    id: string;
-    topic: string;
-    participants: string[];
-    timestamp: Date;
-    outcome: string;
-  }>;
-  decisions: Array<{
-    id: string;
-    title: string;
-    description: string;
-    timestamp: Date;
-    status: 'pending' | 'approved' | 'rejected';
-  }>;
-  memories: Array<{
-    id: string;
-    type: 'episodic' | 'semantic' | 'procedural' | 'working';
-    content: string;
-    timestamp: Date;
-    relevance: number;
-  }>;
-}
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export default function ChatPage() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [contextPanelOpen, setContextPanelOpen] = useState(false);
-  const [contextData, setContextData] = useState<ContextData | null>(null);
-  const [loadingContext, setLoadingContext] = useState(true);
-  const [tabIndex, setTabIndex] = useState(0);
-  const [approvalModalOpen, setApprovalModalOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<{
-    type: string;
-    description: string;
-    confirm: () => void;
-    cancel: () => void;
-  } | null>(null);
-  const [workingState, setWorkingState] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showConversationRail, setShowConversationRail] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Fetch context data on mount
+  // Track mobile viewport for responsive drawer
   useEffect(() => {
-    const fetchContext = async () => {
-      setLoadingContext(true);
+    const checkMobile = () => setIsMobile(window.innerWidth < 1024);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+  useEffect(() => {
+    const fetchConversations = async () => {
       try {
-        const response = await fetch(`${API_URL}/context`);
-        if (!response.ok) throw new Error('Failed to fetch context');
+        const response = await fetch('/api/chat/conversations');
+        if (!response.ok) throw new Error('Failed to fetch conversations');
         const data = await response.json();
-        setContextData(data);
+        setConversations(data.conversations || []);
+        // Select the most recent conversation if none selected
+        if (data.conversations?.length > 0 && !selectedConversationId) {
+          setSelectedConversationId(data.conversations[0].id);
+        }
       } catch (error) {
-        console.error('Error fetching context:', error);
-        setContextData(null);
-      } finally {
-        setLoadingContext(false);
+        console.error('Error fetching conversations:', error);
+        setError('Unable to load conversations.');
       }
     };
 
-    fetchContext();
+    fetchConversations();
   }, []);
+
+  // Fetch messages when conversation changes
+  useEffect(() => {
+    if (!selectedConversationId) {
+      setMessages([]);
+      return;
+    }
+
+    const fetchMessages = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/chat/conversations/${selectedConversationId}`);
+        if (!response.ok) throw new Error('Failed to fetch messages');
+        const data = await response.json();
+        setMessages(data.messages || []);
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+        setError('Unable to load messages.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMessages();
+  }, [selectedConversationId]);
 
   // Scroll to bottom of messages when new message added
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const handleNewConversation = async () => {
+    try {
+      const response = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'New Conversation' }),
+      });
+      if (!response.ok) throw new Error('Failed to create conversation');
+      const data = await response.json();
+      setConversations([data.conversation, ...conversations]);
+      setSelectedConversationId(data.conversation.id);
+    } catch (error) {
+      console.error('Error creating conversation:', error);
+      setError('Unable to create conversation.');
+    }
+  };
+
+  const handleConversationSelect = (conversationId: string) => {
+    setSelectedConversationId(conversationId);
+    if (window.innerWidth < 1024) {
+      setShowConversationRail(false);
+    }
+  };
+
+  const handleConversationDelete = async (conversationId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const response = await fetch(`/api/chat/conversations/${conversationId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to delete conversation');
+      setConversations(conversations.filter(c => c.id !== conversationId));
+      if (selectedConversationId === conversationId) {
+        setSelectedConversationId(conversations[1]?.id || null);
+      }
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
+      setError('Unable to delete conversation.');
+    }
+  };
+
   const handleSend = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || !selectedConversationId) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -141,20 +179,16 @@ export default function ChatPage() {
     setMessages([...messages, userMessage]);
     setInputValue('');
 
-    // Set working state
-    setWorkingState('Thinking...');
-
     try {
-      const response = await fetch(`${API_URL}/chat/completions`, {
+      const response = await fetch(`/api/chat/conversations/${selectedConversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: inputValue, context: contextData }),
+        body: JSON.stringify({ content: inputValue }),
       });
 
       if (!response.ok) throw new Error('Chat API error');
 
       const data = await response.json();
-
       const assistantMessage: Message = {
         id: Date.now().toString() + 'a',
         role: 'assistant',
@@ -162,21 +196,14 @@ export default function ChatPage() {
         timestamp: new Date(),
         sources: data.sources,
         reasoning: data.reasoning,
-        pendingAction: data.pendingAction
-          ? {
-              type: data.pendingAction.type,
-              description: data.pendingAction.description,
-              confirm: data.pendingAction.confirm,
-              cancel: data.pendingAction.cancel,
-            }
-          : undefined,
       };
 
-      setMessages([...messages, assistantMessage]);
+      setMessages([...messages, userMessage, assistantMessage]);
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages([
         ...messages,
+        userMessage,
         {
           id: Date.now().toString() + 'e',
           role: 'assistant',
@@ -184,8 +211,6 @@ export default function ChatPage() {
           timestamp: new Date(),
         },
       ]);
-    } finally {
-      setWorkingState(null);
     }
   };
 
@@ -195,235 +220,222 @@ export default function ChatPage() {
     }
   };
 
-  const toggleContextPanel = () => setContextPanelOpen(!contextPanelOpen);
+  const filteredConversations = conversations.map(conv => ({
+    ...conv,
+    updatedAt: new Date(conv.updatedAt).toLocaleDateString(),
+  }));
 
-  const handleApprovalConfirm = () => {
-    if (pendingAction) {
-      pendingAction.confirm();
-    }
-    setApprovalModalOpen(false);
-    setPendingAction(null);
-  };
-
-  const handleApprovalCancel = () => {
-    if (pendingAction) {
-      pendingAction.cancel();
-    }
-    setApprovalModalOpen(false);
-    setPendingAction(null);
-  };
+  if (error && conversations.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', height: '100vh', flexDirection: 'column' }}>
+        <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+          <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
+            <Typography variant="h6" gutterBottom color="error">
+                          Unable to load conversations
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" component="p">
+                          {error}
+                        </Typography>
+            <Button variant="contained" color="primary" onClick={() => window.location.reload()}>
+              Retry
+            </Button>
+          </Paper>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh' }}>
-      {/* Context Panel (Drawer) */}
+    <Box sx={{ display: 'flex', height: '100vh', backgroundColor: 'background.default' }}>
+      {/* Conversation Rail - Desktop: persistent, Mobile: drawer */}
       <Drawer
-        variant="temporary"
-        anchor="right"
-        open={contextPanelOpen}
-        onClose={toggleContextPanel}
-        sx={{ width: 300, bgcolor: 'background.paper' }}
-        ModalProps={{
-          keepMounted: true, // Better render performance.
+        variant="permanent"
+        sx={{
+          width: { xs: 0, sm: 280 },
+          flexShrink: 0,
+          display: { xs: 'none', sm: 'flex' },
+          '& .MuiDrawer-paper': {
+            width: 280,
+            boxSizing: 'border-box',
+            backgroundColor: 'background.paper',
+            borderRight: '1px solid',
+            borderColor: 'divider',
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+          },
         }}
       >
-        <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6" sx={{ flexGrow: 1 }}>
-              Context
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* Rail Header */}
+          <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Conversations
             </Typography>
-            <IconButton onClick={toggleContextPanel} sx={{ p: 1 }}>
-              <Menu fontSize="small" />
-            </IconButton>
+            <Tooltip title="New conversation">
+              <IconButton size="small" onClick={handleNewConversation} aria-label="New conversation">
+                <Add fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
-          <Divider sx={{ my: 2 }} />
-          {loadingContext ? (
-            <CircularProgress sx={{ mt: 2 }} />
-          ) : (
-            <Tabs value={tabIndex} onChange={(_, newValue) => setTabIndex(newValue)} sx={{ mt: 1 }}>
-              <Tab label="Project" />
-              <Tab label="Notes" />
-              <Tab label="Sessions" />
-              <Tab label="Decisions" />
-              <Tab label="Memories" />
-            </Tabs>
-          )}
-          <Box sx={{ flexGrow: 1, mt: 2, overflow: 'auto' }}>
-            {loadingContext ? null : (
-              <>
-                {/* Project Tab */}
-                <Box sx={{ p: 2, display: tabIndex === 0 ? 'block' : 'none' }}>
-                  {contextData && (
-                    <>
-                      <Typography variant="body2" sx={{ mb: 2 }}>
-                        <strong>Project:</strong> {contextData.project.name}
-                      </Typography>
-                      <Typography variant="caption" sx={{ mb: 2 }}>
-                        {contextData.project.description}
-                      </Typography>
-                      <Typography variant="caption" sx={{ mb: 2 }}>
-                        Last updated: {contextData.project.lastUpdated.toLocaleString()}
-                      </Typography>
-                    </>
-                  )}
-                </Box>
-                {/* Notes Tab */}
-                <Box sx={{ p: 2, display: tabIndex === 1 ? 'block' : 'none' }}>
-                  {contextData && (
-                    <List>
-                      {contextData.relatedNotes.map((note) => (
-                        <ListItem key={note.id} sx={{ mb: 2 }}>
-                          <ListItemAvatar>
-                            <FolderOpen fontSize="small" />
-                          </ListItemAvatar>
-                          <ListItemText
-                            primary={note.title}
-                            secondary={
-                              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                                <Typography variant="caption">{note.snippet}</Typography>
-                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                                  {note.timestamp.toLocaleString()}
-                                </Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  )}
-                </Box>
-                {/* Sessions Tab */}
-                <Box sx={{ p: 2, display: tabIndex === 2 ? 'block' : 'none' }}>
-                  {contextData && (
-                    <List>
-                      {contextData.councilSessions.map((session) => (
-                        <ListItem key={session.id} sx={{ mb: 2 }}>
-                          <ListItemAvatar>
-                            <Group fontSize="small" />
-                          </ListItemAvatar>
-                          <ListItemText
-                            primary={session.topic}
-                            secondary={
-                              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                                <Typography variant="caption">
-                                  Participants: {session.participants.join(', ')}
-                                </Typography>
-                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                                  {session.timestamp.toLocaleString()}
-                                </Typography>
-                                <Typography variant="caption" sx={{ mt: 1 }}>
-                                  Outcome: {session.outcome}
-                                </Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  )}
-                </Box>
-                {/* Decisions Tab */}
-                <Box sx={{ p: 2, display: tabIndex === 3 ? 'block' : 'none' }}>
-                  {contextData && (
-                    <List>
-                      {contextData.decisions.map((decision) => (
-                        <ListItem key={decision.id} sx={{ mb: 2 }}>
-                          <ListItemAvatar>
-                            <Gavel fontSize="small" />
-                          </ListItemAvatar>
-                          <ListItemText
-                            primary={decision.title}
-                            secondary={
-                              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                                <Typography variant="caption">{decision.description}</Typography>
-                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                                  {decision.timestamp.toLocaleString()} •{' '}
-                                  <Chip
-                                    label={decision.status}
-                                    size="small"
-                                    color={
-                                      decision.status === 'approved'
-                                        ? 'success'
-                                        : decision.status === 'rejected'
-                                        ? 'error'
-                                        : 'warning'
-                                    }
-                                  />
-                                </Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  )}
-                </Box>
-                {/* Memories Tab */}
-                <Box sx={{ p: 2, display: tabIndex === 4 ? 'block' : 'none' }}>
-                  {contextData && (
-                    <List>
-                      {contextData.memories.map((memory) => (
-                        <ListItem key={memory.id} sx={{ mb: 2 }}>
-                          <ListItemAvatar>
-                            <Memory fontSize="small" />
-                          </ListItemAvatar>
-                          <ListItemText
-                            primary={memory.content.substring(0, 50) + '...'}
-                            secondary={
-                              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                                <Typography variant="caption">
-                                  Type: {memory.type}
-                                </Typography>
-                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                                  {memory.timestamp.toLocaleString()} • Relevance: {
-                                    Math.round(memory.relevance * 100)
-                                  }%
-                                </Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  )}
-                </Box>
-              </>
-            )}
+
+          {/* Conversation List */}
+          <Box sx={{ flex: 1, overflow: 'auto' }}>
+            <List dense disablePadding>
+              {filteredConversations.length === 0 ? (
+                <ListItem sx={{ px: 2, py: 4, textAlign: 'center' }}>
+                  <ListItemText primary="No conversations yet" sx={{ color: 'text.secondary', variant: 'body2' }} />
+                </ListItem>
+              ) : (
+                filteredConversations.map((conv) => (
+                  <ListItem key={conv.id} sx={{ px: 1, py: 0.5 }}>
+                    <ListItemButton
+                      selected={selectedConversationId === conv.id}
+                      onClick={() => handleConversationSelect(conv.id)}
+                      sx={{
+                        borderRadius: 2,
+                        py: 1,
+                        '&:hover': { bgcolor: 'action.hover' },
+                        ...(selectedConversationId === conv.id && { bgcolor: 'action.selected' }),
+                      }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 36, color: selectedConversationId === conv.id ? 'primary.main' : 'text.secondary' }}>
+                        <FolderOpen fontSize="small" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={conv.title}
+                        secondary={`${conv.messageCount} messages • ${conv.updatedAt}`}
+                        sx={{
+                          primary: { variant: 'body2', fontWeight: 500 },
+                          secondary: { variant: 'caption', color: 'text.secondary' },
+                        }}
+                      />
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleConversationDelete(conv.id, e)}
+                        sx={{ ml: 'auto', color: 'text.secondary', opacity: selectedConversationId === conv.id ? 1 : 0, transition: 'opacity 0.15s' }}
+                        aria-label="Delete conversation"
+                      >
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </ListItemButton>
+                  </ListItem>
+                ))
+              )}
+            </List>
           </Box>
         </Box>
       </Drawer>
 
-      {/* Main Chat Area */}
-      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* Header */}
+      {/* Mobile Conversation Rail Drawer */}
+            <Drawer
+              variant="temporary"
+              anchor="left"
+              open={showConversationRail && isMobile}
+              onClose={() => setShowConversationRail(false)}
+        sx={{
+          display: { xs: 'block', sm: 'none' },
+          '& .MuiDrawer-paper': {
+            width: 280,
+            boxSizing: 'border-box',
+            backgroundColor: 'background.paper',
+            borderRight: '1px solid',
+            borderColor: 'divider',
+          },
+        }}
+        ModalProps={{ keepMounted: true }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Conversations
+            </Typography>
+            <IconButton onClick={() => setShowConversationRail(false)} aria-label="Close">
+              <ChevronLeft fontSize="medium" />
+            </IconButton>
+          </Box>
+          <Box sx={{ flex: 1, overflow: 'auto' }}>
+            <List dense disablePadding>
+              {filteredConversations.map((conv) => (
+                <ListItem key={conv.id} sx={{ px: 1, py: 0.5 }}>
+                  <ListItemButton
+                    selected={selectedConversationId === conv.id}
+                    onClick={() => handleConversationSelect(conv.id)}
+                    sx={{
+                      borderRadius: 2,
+                      py: 1,
+                      '&:hover': { bgcolor: 'action.hover' },
+                      ...(selectedConversationId === conv.id && { bgcolor: 'action.selected' }),
+                    }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 36, color: selectedConversationId === conv.id ? 'primary.main' : 'text.secondary' }}>
+                      <FolderOpen fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={conv.title}
+                      secondary={`${conv.messageCount} messages • ${conv.updatedAt}`}
+                      sx={{
+                        primary: { variant: 'body2', fontWeight: 500 },
+                        secondary: { variant: 'caption', color: 'text.secondary' },
+                      }}
+                    />
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleConversationDelete(conv.id, e)}
+                      sx={{ ml: 'auto', color: 'text.secondary' }}
+                      aria-label="Delete conversation"
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          </Box>
+        </Box>
+      </Drawer>
+
+      {/* Main Workspace */}
+      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {/* Top Bar */}
         <Box
           sx={{
-            px: 4,
-            py: 3,
+            px: { md: 4, xs: 2 },
+            py: 2,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             bgcolor: 'background.paper',
             borderBottom: 1,
             borderColor: 'divider',
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main' }}>{'L'}</Avatar>
-            <Box>
+            <IconButton
+              onClick={() => setShowConversationRail(true)}
+              sx={{ mr: 1, color: 'text.secondary', display: { xs: 'flex', sm: 'none' } }}
+              aria-label="Open conversations"
+            >
+              <MenuIcon />
+            </IconButton>
+            <Avatar sx={{ bgcolor: 'primary.main' }}>L</Avatar>
+            <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 LOGOS Chat
               </Typography>
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                AI-powered assistant
+                {selectedConversationId ? (
+                  conversations.find(c => c.id === selectedConversationId)?.title || 'Conversation'
+                ) : (
+                  'Select or start a conversation'
+                )}
               </Typography>
             </Box>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Tooltip title="Open context panel">
-              <IconButton onClick={toggleContextPanel}>
-                <Search fontSize="small" />
-              </IconButton>
-            </Tooltip>
             <Tooltip title="Settings">
               <IconButton>
                 <Info fontSize="small" />
@@ -433,23 +445,41 @@ export default function ChatPage() {
         </Box>
 
         {/* Conversation Area */}
-        <Box sx={{ flexGrow: 1, overflow: 'auto', p: 4, bgcolor: 'background.default' }}>
-          {workingState && (
-            <Box
-              sx={{
-                p: 2,
-                mb: 3,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                bgcolor: 'action.hover',
-                borderRadius: 1,
-              }}
-            >
+        <Box sx={{ flexGrow: 1, overflow: 'auto', p: { md: 4, xs: 2 }, bgcolor: 'background.default' }}>
+          {loading && (
+            <Box sx={{ p: 2, mb: 3, display: 'flex', alignItems: 'center', gap: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
               <CircularProgress size={20} />
-              <Typography variant="body2">{workingState}</Typography>
+              <Typography variant="body2">Loading conversation...</Typography>
             </Box>
           )}
+
+          {!loading && !selectedConversationId && (
+            <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', p: 4 }}>
+              <FolderOpen fontSize="large" sx={{ opacity: 0.3, mb: 2 }} />
+              <Typography variant="h6" gutterBottom>
+                              No conversation selected
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" component="p">
+                              Start a new conversation or select one from the sidebar.
+                            </Typography>
+              <Button variant="contained" color="primary" onClick={handleNewConversation} sx={{ mt: 2 }}>
+                <Add sx={{ mr: 1 }} fontSize="small" /> New Conversation
+              </Button>
+            </Box>
+          )}
+
+          {!loading && selectedConversationId && messages.length === 0 && (
+            <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', p: 4 }}>
+              <FolderOpen fontSize="large" sx={{ opacity: 0.3, mb: 2 }} />
+              <Typography variant="h6" gutterBottom>
+                              Empty conversation
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" component="p">
+                              Start the conversation by sending a message below.
+                            </Typography>
+            </Box>
+          )}
+
           <List>
             {messages.map((message) => (
               <ListItem
@@ -457,14 +487,13 @@ export default function ChatPage() {
                 sx={{
                   mb: 3,
                   display: 'flex',
-                  flexDirection:
-                    message.role === 'user' ? 'row-reverse' : 'row',
+                  flexDirection: message.role === 'user' ? 'row-reverse' : 'row',
                   alignItems: 'flex-start',
                 }}
               >
                 {message.role === 'assistant' && (
                   <ListItemAvatar sx={{ mt: 1 }}>
-                    <Avatar sx={{ bgcolor: 'secondary.main' }}>{'A'}</Avatar>
+                    <Avatar sx={{ bgcolor: 'primary.main' }}>A</Avatar>
                   </ListItemAvatar>
                 )}
                 <Box sx={{ maxWidth: '80%' }}>
@@ -472,47 +501,12 @@ export default function ChatPage() {
                     variant="outlined"
                     sx={{
                       p: 2,
-                      bgcolor:
-                        message.role === 'user'
-                          ? 'primary.main'
-                          : 'background.paper',
-                      color:
-                        message.role === 'user'
-                          ? 'contrastText'
-                          : 'text.primary',
+                      bgcolor: message.role === 'user' ? 'primary.main' : 'background.paper',
+                      color: message.role === 'user' ? 'contrastText' : 'text.primary',
                       borderRadius: 1,
-                      mb: message.workingState || message.pendingAction ? 1 : 0,
                     }}
                   >
-                    <Box sx={{ mb: 1 }}>
-                      {message.content}
-                    </Box>
-                    {message.workingState && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                        <CircularProgress size={20} />
-                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                          {message.workingState}
-                        </Typography>
-                      </Box>
-                    )}
-                    {message.pendingAction && (
-                      <Box sx={{ mt: 1 }}>
-                        <Button
-                                                  variant="contained"
-                                                  color="error"
-                                                  size="small"
-                                                  sx={{ mb: 1 }}
-                                                  onClick={() => {
-                                                    if (message.pendingAction) {
-                                                      setPendingAction(message.pendingAction);
-                                                      setApprovalModalOpen(true);
-                                                    }
-                                                  }}
-                                                >
-                                                  Review Action
-                                                </Button>
-                      </Box>
-                    )}
+                    <Box sx={{ mb: 1 }}>{message.content}</Box>
                     {(message.sources || message.reasoning) && (
                       <Box sx={{ mt: 1 }}>
                         <Button
@@ -520,12 +514,7 @@ export default function ChatPage() {
                           size="small"
                           sx={{ color: 'text.secondary' }}
                           onClick={() => {
-                            // In a real app, we would open a modal or expand a section
-                            alert(
-                              `Sources: ${message.sources?.join(', ') || 'None'}\n\nReasoning: ${
-                                message.reasoning || 'None'
-                              }`
-                            );
+                            alert(`Sources: ${message.sources?.join(', ') || 'None'}\n\nReasoning: ${message.reasoning || 'None'}`);
                           }}
                         >
                           Show Sources/Reasoning
@@ -536,7 +525,7 @@ export default function ChatPage() {
                 </Box>
                 {message.role === 'user' && (
                   <ListItemAvatar sx={{ mt: 1 }}>
-                    <Avatar sx={{ bgcolor: 'primary.main' }}>{'L'}</Avatar>
+                    <Avatar sx={{ bgcolor: 'primary.main' }}>L</Avatar>
                   </ListItemAvatar>
                 )}
               </ListItem>
@@ -548,7 +537,7 @@ export default function ChatPage() {
         {/* Input Bar */}
         <Box
           sx={{
-            px: 4,
+            px: { md: 4, xs: 2 },
             py: 3,
             display: 'flex',
             gap: 2,
@@ -560,17 +549,21 @@ export default function ChatPage() {
         >
           <TextField
             label="Message"
-            placeholder="Type your message..."
+            placeholder={selectedConversationId ? "Type your message..." : "Start a conversation first"}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            disabled={!selectedConversationId}
             sx={{ flexGrow: 1, margin: 0 }}
+            multiline
+            rows={1}
+            maxRows={4}
           />
           <Button
             variant="contained"
             color="primary"
             size="medium"
-            disabled={!inputValue.trim()}
+            disabled={!inputValue.trim() || !selectedConversationId}
             onClick={handleSend}
             sx={{ px: 4 }}
           >
@@ -578,49 +571,6 @@ export default function ChatPage() {
           </Button>
         </Box>
       </Box>
-
-      {/* Approval Modal */}
-      <Modal
-        open={approvalModalOpen}
-        onClose={handleApprovalCancel}
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 400,
-          bgcolor: 'background.paper',
-          border: '2px solid #000',
-          boxShadow: 24,
-          p: 4,
-        }}
-      >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Typography variant="h5" sx={{ mb: 2 }}>
-            Action Required
-          </Typography>
-          <Typography variant="body1" sx={{ mb: 2 }}>
-            {pendingAction?.description}
-          </Typography>
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
-            <Button
-              variant="outlined"
-              onClick={handleApprovalCancel}
-              sx={{ px: 3 }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="contained"
-              color="error"
-              onClick={handleApprovalConfirm}
-              sx={{ px: 3 }}
-            >
-              Confirm
-            </Button>
-          </Box>
-        </Box>
-      </Modal>
     </Box>
   );
 }

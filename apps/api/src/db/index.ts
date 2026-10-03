@@ -310,9 +310,13 @@ export function getOrCreateDocumentIdentity(
   const size = Buffer.byteLength(content, 'utf8');
 
   // Look up by path first (path is the mutable identifier)
-  const existing = db.prepare('SELECT * FROM documents WHERE path = ?').get(filePath) as DocumentIdentity | undefined;
+  const existing = db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NULL').get(filePath) as DocumentIdentity | undefined;
 
   if (existing) {
+    // If content hasn't changed, return existing document without incrementing version
+    if (hash === existing.current_hash) {
+      return existing;
+    }
     // Update existing document
     const updated: DocumentIdentity = {
       ...existing,
@@ -332,7 +336,25 @@ export function getOrCreateDocumentIdentity(
     // Check if there's a tombstoned document with this path that we can resurrect
     const tombstoned = db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NOT NULL').get(filePath) as DocumentIdentity | undefined;
     if (tombstoned) {
-      // Resurrect the tombstoned document with same stable UUID
+      // If content hasn't changed, just clear deleted_at without incrementing version
+      if (hash === tombstoned.current_hash) {
+        const resurrected: DocumentIdentity = {
+          ...tombstoned,
+          path: filePath,
+          current_hash: hash,
+          version: tombstoned.version,
+          updated_at: now,
+          last_writer: writer,
+          size,
+          deleted_at: null,
+        };
+        db.prepare(`
+          UPDATE documents SET path = ?, current_hash = ?, version = ?, updated_at = ?, last_writer = ?, size = ?, deleted_at = NULL
+          WHERE id = ?
+        `).run(filePath, hash, resurrected.version, now, writer, size, tombstoned.id);
+        return resurrected;
+      }
+      // Resurrect the tombstoned document with same stable UUID, increment version
       const resurrected: DocumentIdentity = {
         ...tombstoned,
         path: filePath,
@@ -374,16 +396,18 @@ export function getDocumentIdentity(docId: string): DocumentIdentity | null {
   return db.prepare('SELECT * FROM documents WHERE id = ?').get(docId) as DocumentIdentity | null;
 }
 
-export function getDocumentByPath(path: string): DocumentIdentity | null {
-  return db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NULL').get(path) as DocumentIdentity | null;
-}
-
 export function getActiveDocumentByPath(path: string): DocumentIdentity | null {
-  return getDocumentByPath(path);
+  return db.prepare('SELECT * FROM documents WHERE path = ? AND deleted_at IS NULL').get(path) as DocumentIdentity | null;
 }
 
 export function getDocumentIncludingTombstone(path: string): DocumentIdentity | null {
   return db.prepare('SELECT * FROM documents WHERE path = ?').get(path) as DocumentIdentity | null;
+}
+
+// DEPRECATED: Use getActiveDocumentByPath or getDocumentIncludingTombstone explicitly
+// Kept for backward compatibility but DOES return tombstoned rows
+export function getDocumentByPath(path: string): DocumentIdentity | null {
+  return getDocumentIncludingTombstone(path);
 }
 
 export function getDocumentByHash(hash: string): DocumentIdentity | null {

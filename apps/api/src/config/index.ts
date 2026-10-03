@@ -18,13 +18,23 @@ function getWorkspaceRoot(): string {
   return path.join(getLogosHome(), 'workspace', 'vault');
 }
 
+function getCorsOrigins(): string[] {
+  const envOrigin = process.env.CORS_ORIGIN;
+  if (envOrigin) {
+    // Split comma-separated origins
+    return envOrigin.split(',').map(o => o.trim()).filter(o => o.length > 0);
+  }
+  // Default: restrict to localhost for development
+  return ['http://localhost:3000', 'http://127.0.0.1:3000'];
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   host: process.env.HOST || '127.0.0.1',
   vaultPath: getWorkspaceRoot(),
   dbPath: process.env.DB_PATH || path.join(getLogosHome(), 'system', 'logos.db'),
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: getCorsOrigins(),
     methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'] as string[],
     allowedHeaders: ['Content-Type', 'Authorization'] as string[],
   },

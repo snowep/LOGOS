@@ -12,9 +12,17 @@ export async function GET(request: NextRequest) {
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      const text = await response.text();
+      return new NextResponse(text, {
+        status: response.status,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
     }
 
+    // Preserve streaming behavior - return the stream directly
     return new NextResponse(response.body, {
       headers: {
         "Content-Type": "text/event-stream",

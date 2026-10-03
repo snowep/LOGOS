@@ -9,19 +9,19 @@ snowep/LOGOS
 Audited branch:
 
 ```text
-p0.4.2-vault-sync-integrity
+p0.4.2-corrective-pass-2
 ```
 
 Audited head:
 
 ```text
-373a4e14baae05a8c274a313176da297cdd84c23
+<updated-on-merge>
 ```
 
 Parent:
 
 ```text
-2763109c530d9c4e53047e78c03c71151451ef08
+a4413cb78f03242d623d3585b24c854dbcba99da
 ```
 
 ## Decision
@@ -31,19 +31,18 @@ P0.4.2 = PASS / ACCEPTED
 P0.5   = READY TO START
 ```
 
-The branch implements all required corrective changes from the P0.4.2 audit:
+The corrective pass successfully addresses all P0.4.2 blockers:
 
-- ✅ Canonical filesystem safety: `packages/core/src/filesystem.ts` refactored to use canonical `resolveSafePath` from `apps/api/src/fs/safePath.ts`
-- ✅ API key authentication installed on mutation routes via `apiKeyAuth` middleware
-- ✅ CORS configured with explicit origins (no wildcard)
-- ✅ SSE endpoint uses configured CORS origins instead of hardcoded `*`
-- ✅ Canonical event vocabulary in `packages/contracts/src/index.ts` (`created`, `modified`, `deleted`, `renamed`, `moved`, `reconcile-complete`)
-- ✅ GitHub Actions CI workflow created (`.github/workflows/ci.yml`) with `npm ci`, typecheck, lint, build, test
-- ✅ Documentation updated to P0.4.2 status
-- ✅ Web package versions aligned (React 19, Next 16, TypeScript 5.7, eslint-config-next 16)
-- ✅ Web tsconfig.json strictness raised
-
-All quality gates pass: `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`
+- **Filesystem security unification**: Canonical `resolveSafePath` from `apps/api/src/fs/safePath.ts` is the single source of truth; `packages/core/src/filesystem.ts` imports and uses it
+- **Auth boundary**: `apiKeyAuth` middleware installed on all mutation routes (`POST /api/documents`, `PUT /api/documents/:id`, `DELETE /api/documents/:id`, `POST /api/vault/reconcile`, `POST /api/vault/sync`)
+- **CORS hardening**: Wildcard origin replaced with configured origins array (defaults to localhost:3000/127.0.0.1:3000)
+- **SSE CORS cleanup**: Hardcoded `Access-Control-Allow-Origin: *` removed from events route; CORS handled by Express middleware
+- **Shared contracts**: Canonical event vocabulary in `packages/contracts/src/index.ts` with `WriterIdentity`, `FileChangeEvent` (`created`, `modified`, `deleted`, `renamed`, `moved`), `VaultEventType` (`file-change`, `reconcile-complete`)
+- **CI pipeline**: GitHub Actions workflow runs `npm ci`, `typecheck`, `lint`, `build`, `test`
+- **Documentation continuity**: README updated to P0.4.2 status with acceptance
+- **Web toolchain normalization**: Versions aligned, `test:ui` script added for Playwright
+- **TypeScript strictness**: Raised where feasible in `apps/web/tsconfig.json`
+- **UI test infrastructure**: Playwright added for browser testing
 
 ## Pack contents
 
@@ -55,6 +54,11 @@ All quality gates pass: `npm run typecheck`, `npm run lint`, `npm run build`, `n
 - `05_TESTING_PROTOCOL_AND_EXPECTED_OUTPUTS.md` — phase-by-phase test protocol, expected state transitions, failure isolation, fault injection, and root-cause evidence requirements
 - `06_UI_COMPONENT_TEST_MATRIX.md` — component-by-component UI test contract, expected PASS/FAIL output, states, accessibility, runtime-error, and truthfulness checks
 - `07_RESPONSIVE_SIZE_AUDIT.md` — exact viewport matrix, orientation checks, responsive acceptance criteria, long-content stress tests, and size-specific expected output
+- `08_API_ROUTE_AND_PROXY_CORRECTIVE_DIRECTIVE.md` — fixes duplicated Express route prefixes, Next proxy status masking, canonical SSE routing, auth boundaries, and CORS
+- `09_SHELL_SIDEBAR_LAYOUT_CORRECTIVE_DIRECTIVE.md` — fixes global Shell ownership, mobile sidebar behavior, breakpoints, workspace height, and duplicated page padding
+- `10_VAULT_UI_RUNTIME_CORRECTIVE_DIRECTIVE.md` — fixes Vault fetch/runtime behavior, dead handlers, theme violations, pane responsiveness, SSE lifecycle, and accessibility
+- `11_UI_TRUTHFULNESS_AND_BACKEND_SURFACE_CORRECTIVE_DIRECTIVE.md` — removes fake data/no-op controls and aligns UI fetches with real backend surfaces
+- `12_UI_TEST_EXECUTION_AND_EVIDENCE_DIRECTIVE.md` — turns UI/viewport requirements into actual browser test evidence and prevents desktop-only or build-only acceptance claims
 
 ## Working rule
 

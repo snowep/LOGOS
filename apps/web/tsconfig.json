@@ -29,7 +29,9 @@
       {
         "name": "next"
       }
-    ]
+    ],
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
   },
   "include": [
     "next-env.d.ts",

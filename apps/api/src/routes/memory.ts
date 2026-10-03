@@ -23,7 +23,7 @@ const queryWithQ = (limitSchema: z.ZodTypeAny = limitMax50) =>
 
 const router = Router();
 
-router.get('/api/memory/search', validate({ query: queryWithQ() }), async (req, res) => {
+router.get('/search', validate({ query: queryWithQ() }), async (req, res) => {
   const { q, limit } = req.query as unknown as { q: string; limit: number };
   const results = await searchAllMemory(q, limit);
   const total = results.episodic.length + results.semantic.length + results.procedural.length;
@@ -41,25 +41,25 @@ const episodicWrite = z.object({
   writer_identity: writerEnum.default('LOGOS'),
 });
 
-router.post('/api/memory/episodic', validate({ body: episodicWrite }), async (req, res) => {
+router.post('/episodic', validate({ body: episodicWrite }), async (req, res) => {
   const b = req.body;
   const id = await writeEpisodic({ ...b, timestamp: b.timestamp || Date.now() });
   res.status(201).json({ id, status: 'created' });
 });
 
-router.get('/api/memory/episodic/search', validate({ query: queryWithQ() }), async (req, res) => {
+router.get('/episodic/search', validate({ query: queryWithQ() }), async (req, res) => {
   const { q, limit, threshold } = req.query as unknown as { q: string; limit: number; threshold: number };
   const results = await searchEpisodic(q, limit, threshold);
   res.json({ results, count: results.length });
 });
 
-router.get('/api/memory/episodic/recent', validate({ query: z.object({ limit: limitMax100 }) }), async (req, res) => {
+router.get('/episodic/recent', validate({ query: z.object({ limit: limitMax100 }) }), async (req, res) => {
   const { limit } = req.query as unknown as { limit: number };
   const results = getRecentEpisodic(limit);
   res.json({ results, count: results.length });
 });
 
-router.get('/api/memory/episodic/:id', validate({ params: z.object({ id: z.string().min(1) }) }), async (req, res) => {
+router.get('/episodic/:id', validate({ params: z.object({ id: z.string().min(1) }) }), async (req, res) => {
   const result = getEpisodicById(req.params.id);
   if (!result) return res.status(404).json({ error: 'not_found' });
   return res.json(result);
@@ -74,18 +74,18 @@ const semanticWrite = z.object({
   writer_identity: writerEnum.default('LOGOS'),
 });
 
-router.post('/api/memory/semantic', validate({ body: semanticWrite }), async (req, res) => {
+router.post('/semantic', validate({ body: semanticWrite }), async (req, res) => {
   const id = await writeSemantic(req.body);
   res.status(201).json({ id, status: 'created' });
 });
 
-router.get('/api/memory/semantic/search', validate({ query: queryWithQ() }), async (req, res) => {
+router.get('/semantic/search', validate({ query: queryWithQ() }), async (req, res) => {
   const { q, limit, threshold } = req.query as unknown as { q: string; limit: number; threshold: number };
   const results = await searchSemantic(q, limit, threshold);
   res.json({ results, count: results.length });
 });
 
-router.get('/api/memory/semantic/:id', validate({ params: z.object({ id: z.string().min(1) }) }), async (req, res) => {
+router.get('/semantic/:id', validate({ params: z.object({ id: z.string().min(1) }) }), async (req, res) => {
   const result = getSemanticById(req.params.id);
   if (!result) return res.status(404).json({ error: 'not_found' });
   updateSemanticAccess(req.params.id);
@@ -101,13 +101,13 @@ const proceduralWrite = z.object({
   writer_identity: writerEnum.default('LOGOS'),
 });
 
-router.post('/api/memory/procedural', validate({ body: proceduralWrite }), async (req, res) => {
+router.post('/procedural', validate({ body: proceduralWrite }), async (req, res) => {
   const id = await writeProcedural(req.body);
   res.status(201).json({ id, status: 'created' });
 });
 
 router.get(
-  '/api/memory/procedural/search',
+  '/procedural/search',
   validate({ query: queryWithQ(z.coerce.number().int().min(1).max(20).default(5)) }),
   async (req, res) => {
     const { q, limit, threshold } = req.query as unknown as { q: string; limit: number; threshold: number };
@@ -117,7 +117,7 @@ router.get(
 );
 
 router.post(
-  '/api/memory/procedural/:id/use',
+  '/procedural/:id/use',
   validate({
     params: z.object({ id: z.string().min(1) }),
     body: z.object({ success: z.boolean().default(true) }),
@@ -137,12 +137,12 @@ const workingWrite = z.object({
   expires_at: z.number().int().positive().optional(),
 });
 
-router.post('/api/memory/working', validate({ body: workingWrite }), async (req, res) => {
+router.post('/working', validate({ body: workingWrite }), async (req, res) => {
   const id = writeWorking(req.body);
   res.status(201).json({ id, status: 'created' });
 });
 
-router.get('/api/memory/working/:sessionId/:key?', async (req, res) => {
+router.get('/working/:sessionId/:key?', async (req, res) => {
   const { sessionId, key } = req.params;
   if (key) {
     const result = getWorking(sessionId, key);
@@ -154,7 +154,7 @@ router.get('/api/memory/working/:sessionId/:key?', async (req, res) => {
 });
 
 router.put(
-  '/api/memory/working/:sessionId/:key',
+  '/working/:sessionId/:key',
   validate({ body: z.object({ value: z.string() }) }),
   async (req, res) => {
     updateWorking(req.params.sessionId, req.params.key, req.body.value);
@@ -162,7 +162,7 @@ router.put(
   }
 );
 
-router.delete('/api/memory/working/:sessionId/:key?', async (req, res) => {
+router.delete('/working/:sessionId/:key?', async (req, res) => {
   const { sessionId, key } = req.params;
   if (key) {
     deleteWorking(sessionId, key);
@@ -172,14 +172,14 @@ router.delete('/api/memory/working/:sessionId/:key?', async (req, res) => {
   return res.json({ status: 'cleared', count });
 });
 
-router.post('/api/memory/working/cleanup', async (_req, res) => {
+router.post('/working/cleanup', async (_req, res) => {
   const count = clearExpiredWorking();
   res.json({ status: 'cleaned', count });
 });
 
 // --- Promotion ---
 router.get(
-  '/api/memory/promote/events',
+  '/promote/events',
   validate({ query: z.object({ limit: limitMax100, offset: z.coerce.number().int().nonnegative().default(0) }) }),
   (req, res) => {
     const { limit, offset } = req.query as unknown as { limit: number; offset: number };
@@ -192,7 +192,7 @@ router.get(
 const promoteBase = z.object({ document_event_id: z.string().min(1) });
 
 router.post(
-  '/api/memory/promote/episodic',
+  '/promote/episodic',
   validate({
     body: promoteBase.extend({
       type: z.string().optional(),
@@ -228,7 +228,7 @@ router.post(
 );
 
 router.post(
-  '/api/memory/promote/semantic',
+  '/promote/semantic',
   validate({
     body: promoteBase.extend({
       fact: z.string().optional(),
@@ -255,7 +255,7 @@ router.post(
 );
 
 router.post(
-  '/api/memory/promote/procedural',
+  '/promote/procedural',
   validate({
     body: promoteBase.extend({
       name: z.string().min(1).max(200),

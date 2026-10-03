@@ -37,7 +37,7 @@ export function installConsoleCapture(): void {
 
 const router = Router();
 
-router.get('/api/system', (_req, res) => {
+router.get('/', (_req, res) => {
   try {
     const health = {
       status: 'ok',
@@ -122,7 +122,7 @@ router.get('/health', (_req, res) => {
   });
 });
 
-router.get('/api/version', (_req, res) => {
+router.get('/version', (_req, res) => {
   res.json({
     version: config.version,
     name: config.name,

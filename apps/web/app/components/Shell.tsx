@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -107,7 +107,8 @@ export default function Shell({ children }: ShellProps) {
         }}
       >
         <ListItemIcon><Icon fontSize="medium" /></ListItemIcon>
-        {expanded && <ListItemText primary={label} />}
+        {/* Show labels on desktop when expanded, always on mobile (since drawer is temporary full-width) */}
+        {(expanded || isMobile) && <ListItemText primary={label} />}
       </ListItem>
     );
   };
@@ -174,7 +175,7 @@ export default function Shell({ children }: ShellProps) {
             ))}
           </List>
 
-          {expanded && !isMobile && (
+          {!isMobile && expanded && (
             <Box sx={{ px: 2, pb: 2 }}>
               <IconButton
                 onClick={toggleDrawer}
@@ -254,11 +255,12 @@ export default function Shell({ children }: ShellProps) {
           sx={{
             flexGrow: 1,
             pt: APP_BAR_HEIGHT,
-            px: { md: 4, xs: 2 },
+            // Remove horizontal padding on content area to avoid double padding with AppBar
+            px: 0,
             pb: 4,
             width: { md: `calc(100% - ${drawerWidth}px)` },
             ml: { md: `${drawerWidth}px` },
-            minHeight: `calc(100vh - ${APP_BAR_HEIGHT}px)`,
+            minHeight: `calc(100dvh - ${APP_BAR_HEIGHT}px)`,
             transition: theme.transitions.create(['width', 'margin'], {
               easing: theme.transitions.easing.sharp,
               duration: theme.transitions.duration.enteringScreen,

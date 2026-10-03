@@ -14,9 +14,12 @@ import {
   Avatar,
   Tooltip,
   Drawer,
+  IconButton,
+  Alert,
+  AlertTitle,
+  CircularProgress,
 } from '@mui/material';
 import { Psychology, Terminal, Speed, Hub } from '@mui/icons-material';
-import { IconButton } from '@mui/material';
 
 const MEMORY_TYPES = [
   { label: 'Episodic', icon: Psychology, color: 'primary' },
@@ -43,6 +46,8 @@ function MemoryPage() {
   const [advancedDetail, setAdvancedDetail] = useState(false);
   const [selectedMemory, setSelectedMemory] = useState<MemoryItem | null>(null);
   const [openDetail, setOpenDetail] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch memories from API
   useEffect(() => {
@@ -52,31 +57,12 @@ function MemoryPage() {
         if (!response.ok) throw new Error('Failed to fetch memories');
         const data: MemoryItem[] = await response.json();
         setMemories(data);
+        setError(null);
       } catch (error) {
         console.error('Error fetching memories:', error);
-        // Show placeholder data for development
-        setMemories([
-          {
-            id: '1',
-            content: 'Scarcity is a core principle of DROP 002.',
-            source: 'Brand Council — Session 04',
-            related: ['DROP 002', 'scarcity.md'],
-            confidence: 'High',
-            created: '2026-09-29T10:30:00Z',
-            status: 'Durable',
-            types: ['Semantic'],
-          },
-          {
-            id: '2',
-            content: 'User prefers dark theme and minimal Apple-like visual restraint.',
-            source: 'User onboarding interview',
-            related: ['About you'],
-            confidence: 'High',
-            created: '2026-09-28T15:45:00Z',
-            status: 'Durable',
-            types: ['Episodic'],
-          },
-        ]);
+        setError('Unable to load memories.');
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -121,8 +107,52 @@ function MemoryPage() {
     setOpenDetail(true);
   };
 
+  const handleRetry = () => {
+    setLoading(true);
+    setError(null);
+    const fetchMemories = async () => {
+      try {
+        const response = await fetch('/api/memory');
+        if (!response.ok) throw new Error('Failed to fetch memories');
+        const data: MemoryItem[] = await response.json();
+        setMemories(data);
+        setError(null);
+      } catch (error) {
+        console.error('Error fetching memories:', error);
+        setError('Unable to load memories.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchMemories();
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', height: 'calc(100dvh - 56px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ display: 'flex', height: 'calc(100dvh - 56px)', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+        <Paper elevation={0} variant="outlined" sx={{ p: 4, maxWidth: 500, textAlign: 'center', borderColor: 'error.main' }}>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            <AlertTitle>Failed to load memories</AlertTitle>
+            {error}
+          </Alert>
+          <Button variant="contained" color="primary" onClick={handleRetry}>
+            Retry
+          </Button>
+        </Paper>
+      </Box>
+    );
+  }
+
   return (
-    <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, maxWidth: 1400, mx: 'auto', minHeight: '100vh' }}>
+    <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, maxWidth: 1400, mx: 'auto', minHeight: 'calc(100dvh - 56px)' }}>
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 4 }}>
         <Typography variant="h2" sx={{ fontWeight: 700 }}>
@@ -147,26 +177,26 @@ function MemoryPage() {
       </Box>
 
       {/* Categories */}
-             <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 2, mb: 4 }}>
-               {(['All', 'Recent', 'About you', 'Projects', 'Decisions', 'Knowledge', 'Ways of working'] as const).map((cat) => (
-                 <Paper
-                   key={cat}
-                   variant="outlined"
-                   sx={{ p: 3, textAlign: 'center', cursor: 'pointer', backgroundColor: category === cat ? 'primary.main' : 'transparent', color: category === cat ? 'primary.contrastText' : 'text.primary' }}
-                   onClick={() => setCategory(cat as typeof category)}
-                 >
-                   <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                     {cat}
-                   </Typography>
-                 </Paper>
-               ))}
-             </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 2, mb: 4 }}>
+        {(['All', 'Recent', 'About you', 'Projects', 'Decisions', 'Knowledge', 'Ways of working'] as const).map((cat) => (
+          <Paper
+            key={cat}
+            variant="outlined"
+            sx={{ p: 3, textAlign: 'center', cursor: 'pointer', backgroundColor: category === cat ? 'primary.main' : 'transparent', color: category === cat ? 'primary.contrastText' : 'text.primary' }}
+            onClick={() => setCategory(cat as typeof category)}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              {cat}
+            </Typography>
+          </Paper>
+        ))}
+      </Box>
 
       {/* Memories List */}
       <Box sx={{ mb: 4 }}>
         {sortedMemories.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            No memories found.
+            Nothing here yet.
           </Typography>
         ) : (
           <List sx={{ width: '100%' }}>
@@ -229,7 +259,6 @@ function MemoryPage() {
                 Memory Detail
               </Typography>
               <IconButton onClick={() => setOpenDetail(false)} sx={{ p: 1 }}>
-                {/* Assuming we have Close icon; for simplicity, use X */}
                 <Typography>×</Typography>
               </IconButton>
             </Box>
@@ -291,7 +320,6 @@ function MemoryPage() {
               size="small"
               sx={{ alignSelf: 'flex-end' }}
               onClick={() => {
-                // TODO: Implement edit/delete actions
                 alert('Actions not implemented yet');
               }}
             >

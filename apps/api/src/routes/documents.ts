@@ -7,11 +7,10 @@ import {
   resolveSafePath,
   WriterIdentity,
   computeContentHash,
-  getDocumentByPath,
+  getActiveDocumentByPath,
   getDocumentIdentity,
 } from '../db';
 import { reconcile } from '../services/reconcile';
-import { registerLogosWrite } from '../services/watcher';
 import { config } from '../config';
 import { validate } from '../middleware/validate';
 import { apiKeyAuth } from '../auth';
@@ -32,12 +31,12 @@ const createBody = z.object({
 
 const updateBody = z.object({
   content: z.string().max(10 * 1024 * 1024),
-  expectedVersion: z.number().int().min(0),
+  expectedVersion: z.number().int().min(1),
   expectedHash: z.string().min(1),
 });
 
 const deleteQuery = z.object({
-  expectedVersion: z.coerce.number().int().min(0),
+  expectedVersion: z.coerce.number().int().min(1),
   expectedHash: z.string().min(1),
 });
 
@@ -50,14 +49,14 @@ const eventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-const idParam = z.object({ id: z.string().min(1) });
+const idParam = z.object({ id: z.string().uuid() });
 
 const reconcileBody = z.object({ path: z.string().optional() });
 
 const router = Router();
 
 router.get(
-  '/api/documents',
+  '/',
   validate({ query: listQuery }),
   (req, res) => {
     const { limit, offset } = req.query as unknown as z.infer<typeof listQuery>;
@@ -69,7 +68,7 @@ router.get(
 );
 
 router.get(
-  '/api/documents/:id/events',
+  '/:id/events',
   validate({ params: idParam, query: eventsQuery }),
   (req, res) => {
     const { id } = req.params;
@@ -80,7 +79,7 @@ router.get(
 );
 
 router.get(
-  '/api/documents/:id',
+  '/:id',
   validate({ params: idParam }),
   (req, res) => {
     const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
@@ -105,8 +104,7 @@ router.get(
 );
 
 router.post(
-  '/api/documents',
-  apiKeyAuth(['documents:write']),
+  '/',
   validate({ body: createBody }),
   (req, res) => {
     const { path: docPath, content } =
@@ -133,8 +131,7 @@ router.post(
 );
 
 router.put(
-  '/api/documents/:id',
-  apiKeyAuth(['documents:write']),
+  '/:id',
   validate({ params: idParam, body: updateBody }),
   (req, res) => {
     const { content, expectedVersion, expectedHash } = req.body as z.infer<typeof updateBody>;
@@ -167,8 +164,7 @@ router.put(
 );
 
 router.delete(
-  '/api/documents/:id',
-  apiKeyAuth(['documents:write']),
+  '/:id',
   validate({ params: idParam, query: deleteQuery }),
   async (req, res) => {
     const doc = getActiveDocument(req.params.id);
@@ -199,7 +195,7 @@ router.delete(
 );
 
 router.post(
-  '/api/vault/reconcile',
+  '/vault/reconcile',
   apiKeyAuth(['vault:reconcile']),
   validate({ body: reconcileBody }),
   async (req, res, next) => {
@@ -215,6 +211,7 @@ router.post(
         conflicts: result.conflicts,
         conflictDetails: result.conflictDetails,
         skipped: result.skipped,
+        scanQuality: result.scanQuality,
         timestamp: new Date().toISOString(),
       });
     } catch (err) {
@@ -225,7 +222,7 @@ router.post(
 );
 
 // Legacy sync endpoint — same handler
-router.post('/api/vault/sync', apiKeyAuth(['vault:reconcile']), validate({ body: reconcileBody }), async (req, res, next) => {
+router.post('/vault/sync', apiKeyAuth(['vault:reconcile']), validate({ body: reconcileBody }), async (req, res, next) => {
   try {
     const { path: syncPath } = req.body as z.infer<typeof reconcileBody>;
     const result = await reconcile(syncPath);
@@ -238,6 +235,7 @@ router.post('/api/vault/sync', apiKeyAuth(['vault:reconcile']), validate({ body:
       conflicts: result.conflicts,
       conflictDetails: result.conflictDetails,
       skipped: result.skipped,
+      scanQuality: result.scanQuality,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

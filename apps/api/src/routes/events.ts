@@ -27,12 +27,15 @@ export function getSseClientCount(): number {
 
 const router = Router();
 
-// SSE endpoint for vault sync events
-router.get('/events/vault', (req: Request, res: Response) => {
+// SSE endpoint for vault sync events - canonical endpoint: GET /events/vault
+router.get('/vault', (req: Request, res: Response) => {
   // Use configured CORS origins instead of wildcard
   const origin = req.headers.origin;
-  const allowedOrigins = config.cors.origin === '*' ? '*' : config.cors.origin;
-  const corsOrigin = typeof allowedOrigins === 'string' && allowedOrigins !== '*' ? allowedOrigins : (origin || '*');
+  const allowedOrigins = config.cors.origin;
+  // config.cors.origin is now string[] - check if it includes the request origin or is '*'
+  const corsOrigin = Array.isArray(allowedOrigins) 
+    ? (allowedOrigins.includes('*') || allowedOrigins.includes(origin || '') ? (origin || '*') : allowedOrigins[0])
+    : (allowedOrigins === '*' ? (origin || '*') : allowedOrigins);
   
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',

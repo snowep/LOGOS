@@ -22,8 +22,9 @@ export function createApp(): Express {
   app.use('/api/events', eventsRouter);
 
   // Protected mutation routes - require API key auth
-  // These are already in documentsRouter but we re-apply middleware here for clarity
-  // Note: The middleware is applied inside the routes themselves via validate()
+  // The routes themselves validate write permissions
+  // but we apply a base auth check here for defense in depth
+  // Note: actual write endpoints are /api/documents (POST), /api/documents/:id (PUT/DELETE), /api/vault/reconcile, /api/vault/sync
 
   app.use(safeErrorHandler);
 

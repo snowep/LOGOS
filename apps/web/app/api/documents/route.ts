@@ -13,8 +13,15 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Preserve the upstream status code instead of turning everything into 500
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      const text = await response.text();
+      return new NextResponse(text, {
+        status: response.status,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
     }
 
     const data = await response.json();

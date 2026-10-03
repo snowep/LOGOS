@@ -7,6 +7,7 @@
   "scripts": {
     "build": "echo \"UI package built\"",
     "typecheck": "echo \"UI package: no TypeScript files to check\"",
-    "test": "echo \"UI package: no tests\""
+    "test": "echo \"UI package: no tests\"",
+    "lint": "echo \"UI package: no lint\""
   }
 }

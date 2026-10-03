@@ -1,0 +1,34 @@
+fix(P0.4.2): Complete corrective pass for vault sync integrity + UI truthfulness + DevOps
+
+Core integrity (Severity 1):
+- Tombstone lifecycle: getActiveDocumentByPath(), getDocumentIncludingTombstone(), idempotent getOrCreateDocumentIdentity()
+- Same-path recreate -> NEW identity (no silent tombstone mutation)
+- Cross-resource atomicity: validate -> atomic FS -> verify -> SQLite transaction (row+event) -> finalize
+- Writer identity: removed registerLogosWrite() from HTTP routes, USER for public writes
+- Internal APIs: deleted writeDocumentInternal(), moved to documentService.ts
+- Active listing: WHERE deleted_at IS NULL
+- Split Zod schemas: create/update/delete/reconcile inputs + UUID schema
+- SSE contract unified: created/modified/deleted/renamed/moved/reconcile-complete
+- Reconcile scan quality: COMPLETE/PARTIAL/FAILED -- only COMPLETE tombstones
+- Phase metadata updated to P0.4.2
+
+UI corrections (Severity 2):
+- Genie-inspired Chat: two-zone conversation rail + dominant workspace, real data only
+- Vault: removed dead handlers, theme tokens only, responsive three-pane, SSE stable callbacks
+- Memory: no fake fallback, honest error/empty states
+- System: MUI-only, theme tokens, real runtime values
+- Settings: no no-op controls, no machine paths, every control real+persisted or disabled+unavailable
+- Theme: dark-first, no OS auto-select, toggle works, warm accent #B87945
+- Shell/Sidebar: "use client", mobile drawer with labels, workspace height calc(100dvh - 56px)
+- API Routes/Proxy: fixed duplicated prefixes, 404 preserved, SSE streaming, auth on mutations
+
+DevOps:
+- Filesystem security: canonical safePath.ts, removed core duplicate
+- Auth: apiKeyAuth middleware installed, CORS configured origins
+- Contracts: packages/contracts canonical event vocabulary
+- CI: GitHub Actions workflow
+- Docs: README updated to P0.4.2
+- Toolchain: web versions aligned, tsconfig strictness raised
+- UI test infrastructure: Playwright added
+
+All gates pass: typecheck, lint, build, test (14 passing)

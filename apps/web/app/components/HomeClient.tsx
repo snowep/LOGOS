@@ -304,7 +304,7 @@ export default function HomeClient({ initialProjects, initialActivities }: HomeC
               Welcome to LOGOS
             </Typography>
             <Typography variant="body1" sx={{ mb: 2, maxWidth: 500, mx: "auto" }}>
-              Your personal AI assistant. Start by telling LOGOS what you're working on, or create a new project in the Work section.
+              Your personal AI assistant. Start by telling LOGOS what you&apos;re working on, or create a new project in the Work section.
             </Typography>
             <Button variant="contained" size="large" startIcon={<FolderOpen />} onClick={() => (window.location.href = "/work")} sx={{ textTransform: "none", fontWeight: 500 }}>
               Create a Project
